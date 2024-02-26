@@ -1,3 +1,5 @@
+import { inflateRawSync } from "zlib";
+
 export const deepMerge = (initial: unknown, update: unknown) => {
   for (const key in (update as Record<string, unknown>)) {
     if (key in (initial as Record<string, unknown>)) {
@@ -48,4 +50,10 @@ export const deepMerge = (initial: unknown, update: unknown) => {
   }
 
   return initial;
+};
+
+export const decompressZlibData = (b64Encoded: string) => {
+  const deflatedZlibData = Buffer.from(b64Encoded, "base64");
+  const inflatedData = inflateRawSync(deflatedZlibData);
+  return JSON.parse(inflatedData.toString("utf8"));
 };

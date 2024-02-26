@@ -2,7 +2,7 @@ import { Client as SignalRClient, HubEvent } from "node-signalr";
 
 import { EventEmitter } from "events";
 import { F1LiveTiming } from "./type";
-import { deepMerge } from "./utils";
+import { deepMerge, decompressZlibData } from "./utils";
 
 export class F1LiveTimingClient extends (EventEmitter as F1LiveTiming.EventEmitter) {
   public readonly Current: Record<string, unknown>;
@@ -24,7 +24,7 @@ export class F1LiveTimingClient extends (EventEmitter as F1LiveTiming.EventEmitt
       .on(this.streamingHub, "feed",
           ((topic: string, data: unknown, timestamp: string) => {
             this.Current[topic] = (topic === "Position.z" || topic === "CarData.z") ?
-              data :
+              decompressZlibData(data as string) :
               deepMerge(this.Current[topic], data);
 
             this.emit("feed", topic, data, timestamp);
@@ -63,7 +63,9 @@ export class F1LiveTimingClient extends (EventEmitter as F1LiveTiming.EventEmitt
       .call(this.streamingHub, "Subscribe", topics) as Record<string, unknown>;
 
     for (const key in current)
-      this.Current[key] = current[key];
+      this.Current[key.replace(/\.z$/, "")] = key.endsWith(".z") ?
+        decompressZlibData(current[key] as string) :
+        current[key];
 
     return current;
   }

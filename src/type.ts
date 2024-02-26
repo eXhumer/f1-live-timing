@@ -36,6 +36,34 @@ export namespace F1LiveTiming {
 }
 
 export namespace LiveTimingData {
+  export type CarData = {
+    Entries: {
+      Utc: string;
+      Cars: {[key: string]: {
+        Channels: {
+          0: number;
+          2: number;
+          3: number;
+          4: number;
+          5: number;
+          45: number;
+        };
+      }};
+    }[];
+  };
+
+  export type Position = {
+    Position: {
+      Timestamp: string;
+      Entries: {[key: string]: {
+        Status: "OnTrack" | 0 | 1;
+        X: number;
+        Y: number;
+        Z: number;
+      }};
+    }[];
+  };
+
   export type SessionInfo = {
     Meeting: {
       Key: number;

@@ -186,6 +186,8 @@ program
         "ArchiveStatus",
         "ContentStreams",
         "WeatherData",
+        "CarData.z",
+        "Position.z",
       ])
       .makeOptionMandatory()
   )
