@@ -1,0 +1,31 @@
+{
+  "name": "f1-live-timing",
+  "version": "0.0.1",
+  "description": "Unofficial Live Timing client for Formula 1",
+  "main": "dist/index.js",
+  "scripts": {
+    "postinstall": "patch-package",
+    "build": "tsc",
+    "start": "node .",
+    "dev-start": "nodemon src/index.ts"
+  },
+  "author": {
+    "name": "eXhumer",
+    "email": "exhumer@exhumer.cc"
+  },
+  "license": "AGPL-3.0-only",
+  "devDependencies": {
+    "@types/node": "^20.11.20",
+    "nodemon": "^3.1.0",
+    "patch-package": "^8.0.0",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.3.3"
+  },
+  "dependencies": {
+    "commander": "^12.0.0",
+    "discord.js": "^14.14.1",
+    "node-signalr": "^3.0.0-alpha.1",
+    "throat": "^6.0.2",
+    "typed-emitter": "^2.1.0"
+  }
+}
