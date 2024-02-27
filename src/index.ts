@@ -184,6 +184,7 @@ const showTeamRadio = async (whClient: WebhookClient, ltClient: F1LiveTimingClie
 
   const si = ltClient.Current.SessionInfo as LiveTimingData.SessionInfo;
   const tr = ltClient.Current.TeamRadio as LiveTimingData.TeamRadio;
+  const dl = ltClient.Current.DriverList as LiveTimingData.DriverList | undefined;
 
   const lastCapture = tr.Captures[tr.Captures.length - 1];
 
@@ -200,8 +201,19 @@ const showTeamRadio = async (whClient: WebhookClient, ltClient: F1LiveTimingClie
   const audioBlob = await audioRes.blob();
   const transcribedAudio = await transcribeAudio(audioBlob, filename); 
 
-  const embed = new EmbedBuilder()
-    .setTitle(`Team Radio from Driver ${lastCapture.RacingNumber}}`)
+  let embed = new EmbedBuilder();
+
+  if (dl) {
+    const driver = dl[lastCapture.RacingNumber];
+
+    embed = embed
+      .setImage(driver.HeadshotUrl)
+      .setTitle(`Team Radio from ${driver.FirstName} ${driver.LastName} (${driver.Tla})`);
+  } else
+    embed = embed
+      .setTitle(`Team Radio from #${lastCapture.RacingNumber}`);
+
+  embed = embed
     .setTimestamp(timestamp ? new Date(timestamp) : new Date(lastCapture.Utc))
     .setDescription(transcribedAudio.replace(/\n/g, ' ').trim());
 
@@ -228,6 +240,7 @@ program
         "CarData.z",
         "Position.z",
         "TeamRadio",
+        "DriverList",
       ])
       .makeOptionMandatory()
   )
