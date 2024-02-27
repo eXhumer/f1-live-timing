@@ -1,5 +1,5 @@
 import { program, Option } from "commander";
-import { EmbedBuilder, WebhookClient } from 'discord.js';
+import { AttachmentBuilder, EmbedBuilder, WebhookClient } from 'discord.js';
 import { F1LiveTimingClient } from "./client";
 import { ArchiveLiveTiming, LiveTimingData } from "./type";
 import { transcribeAudio } from "./utils";
@@ -197,17 +197,22 @@ const showTeamRadio = async (whClient: WebhookClient, ltClient: F1LiveTimingClie
   if (!filename)
     throw new Error(`Failed to get filename from ${lastCapture.Path}`);
 
-  const transcribedAudio = await transcribeAudio(await audioRes.blob(), filename); 
+  const audioBlob = await audioRes.blob();
+  const transcribedAudio = await transcribeAudio(audioBlob, filename); 
 
   const embed = new EmbedBuilder()
     .setTitle(`Team Radio from Driver ${lastCapture.RacingNumber}}`)
     .setTimestamp(timestamp ? new Date(timestamp) : new Date(lastCapture.Utc))
-    .setDescription(transcribedAudio);
+    .setDescription(transcribedAudio.replace(/\n/g, ' ').trim());
+
+  const attachment = new AttachmentBuilder(Buffer.from(await audioBlob.arrayBuffer()))
+    .setName(filename);
 
   await whClient.send({
     username: 'Team Radio Bot',
     avatarURL: 'https://i.imgur.com/AfFp7pu.png',
-    embeds: [embed]
+    embeds: [embed],
+    files: [attachment],
   });
 };
 
