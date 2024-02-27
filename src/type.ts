@@ -165,7 +165,11 @@ export namespace LiveTimingData {
   };
 
   export type TeamRadio = {
-
+    Captures: {
+      Utc: string;
+      RacingNumber: string;
+      Path: string;
+    }[];
   };
 
   export type TopThree = {

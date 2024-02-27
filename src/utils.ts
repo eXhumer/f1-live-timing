@@ -57,3 +57,25 @@ export const decompressZlibData = (b64Encoded: string) => {
   const inflatedData = inflateRawSync(deflatedZlibData);
   return JSON.parse(inflatedData.toString("utf8"));
 };
+
+export const transcribeAudio = async (
+  audioBlob: Blob,
+  audioFileName: string,
+  transcriberUrl: string = "http://127.0.0.1:8080/inference",
+) => {
+  const formData = new FormData();
+  formData.append("file", audioBlob, audioFileName);
+  formData.append("response_type", "json");
+
+  const res = await fetch(transcriberUrl, { method: "POST", body: formData });
+
+  if (res.status !== 200)
+    throw new Error(`Transcriber server returned status code ${res.status}`);
+
+  const data = await res.json();
+
+  if (!data.text)
+    throw new Error("Transcriber server did not return any text");
+
+  return data.text as string;
+};

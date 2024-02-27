@@ -2,6 +2,7 @@ import { program, Option } from "commander";
 import { EmbedBuilder, WebhookClient } from 'discord.js';
 import { F1LiveTimingClient } from "./client";
 import { ArchiveLiveTiming, LiveTimingData } from "./type";
+import { transcribeAudio } from "./utils";
 import { promises as fs } from "fs";
 import throat from "throat";
 
@@ -127,7 +128,7 @@ const showAudioStreams = async (whClient: WebhookClient, ltClient: F1LiveTimingC
     return embed;
   });
 
-  whClient.send({
+  await whClient.send({
     username: 'Audio Streams Bot',
     avatarURL: 'https://i.imgur.com/AfFp7pu.png',
     embeds: embeds
@@ -170,10 +171,43 @@ const showContentStreams = async (whClient: WebhookClient, ltClient: F1LiveTimin
     return embed;
   });
 
-  whClient.send({
+  await whClient.send({
     username: 'Content Streams Bot',
     avatarURL: 'https://i.imgur.com/AfFp7pu.png',
     embeds: embeds
+  });
+};
+
+const showTeamRadio = async (whClient: WebhookClient, ltClient: F1LiveTimingClient, timestamp?: string) => {
+  if (!ltClient.Current.SessionInfo || !ltClient.Current.TeamRadio)
+    throw new Error("SessionInfo or TeamRadio not available");
+
+  const si = ltClient.Current.SessionInfo as LiveTimingData.SessionInfo;
+  const tr = ltClient.Current.TeamRadio as LiveTimingData.TeamRadio;
+
+  const lastCapture = tr.Captures[tr.Captures.length - 1];
+
+  const audioRes = await fetch(`https://livetiming.formula1.com/static/${si.Path}${lastCapture.Path}`);
+
+  if (audioRes.status !== 200)
+    throw new Error(`Failed to fetch audio from ${si.Path}${lastCapture.Path}`);
+
+  const filename = lastCapture.Path.split('/').pop();
+
+  if (!filename)
+    throw new Error(`Failed to get filename from ${lastCapture.Path}`);
+
+  const transcribedAudio = await transcribeAudio(await audioRes.blob(), filename); 
+
+  const embed = new EmbedBuilder()
+    .setTitle(`Team Radio from Driver ${lastCapture.RacingNumber}}`)
+    .setTimestamp(timestamp ? new Date(timestamp) : new Date(lastCapture.Utc))
+    .setDescription(transcribedAudio);
+
+  await whClient.send({
+    username: 'Team Radio Bot',
+    avatarURL: 'https://i.imgur.com/AfFp7pu.png',
+    embeds: [embed]
   });
 };
 
@@ -188,6 +222,7 @@ program
         "WeatherData",
         "CarData.z",
         "Position.z",
+        "TeamRadio",
       ])
       .makeOptionMandatory()
   )
@@ -244,6 +279,9 @@ program
 
       else if (topic === "AudioStreams")
         await showAudioStreams(webhookClient, ltClient, timestamp);
+
+      else if (topic === "TeamRadio" && ltClient.Current.SessionInfo) 
+        await showTeamRadio(webhookClient, ltClient, timestamp);
     });
 
     ltClient.Start();
