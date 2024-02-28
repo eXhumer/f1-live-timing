@@ -8,6 +8,12 @@ import throat from "throat";
 
 const limiter = throat(5);
 
+type TeamRadioCapture = {
+  Path: string;
+  Utc: string;
+  RacingNumber: string;
+};
+
 const showArchiveStatus = async (whClient: WebhookClient, ltClient: F1LiveTimingClient, timestamp?: string) => {
   const as = ltClient.Current.ArchiveStatus as LiveTimingData.ArchiveStatus | undefined;
 
@@ -178,25 +184,26 @@ const showContentStreams = async (whClient: WebhookClient, ltClient: F1LiveTimin
   });
 };
 
-const showTeamRadio = async (whClient: WebhookClient, ltClient: F1LiveTimingClient, timestamp?: string) => {
-  if (!ltClient.Current.SessionInfo || !ltClient.Current.TeamRadio)
-    throw new Error("SessionInfo or TeamRadio not available");
+const createTeamRadioCaptureMsgData = async (
+  capture: TeamRadioCapture,
+  ltClient: F1LiveTimingClient,
+  timestamp?: string,
+) => {
+  if (!ltClient.Current.SessionInfo)
+    throw new Error("SessionInfo not available");
 
   const si = ltClient.Current.SessionInfo as LiveTimingData.SessionInfo;
-  const tr = ltClient.Current.TeamRadio as LiveTimingData.TeamRadio;
   const dl = ltClient.Current.DriverList as LiveTimingData.DriverList | undefined;
 
-  const lastCapture = tr.Captures[tr.Captures.length - 1];
-
-  const audioRes = await fetch(`https://livetiming.formula1.com/static/${si.Path}${lastCapture.Path}`);
+  const audioRes = await fetch(`https://livetiming.formula1.com/static/${si.Path}${capture.Path}`);
 
   if (audioRes.status !== 200)
-    throw new Error(`Failed to fetch audio from ${si.Path}${lastCapture.Path}`);
+    throw new Error(`Failed to fetch audio from ${si.Path}${capture.Path}`);
 
-  const filename = lastCapture.Path.split('/').pop();
+  const filename = capture.Path.split('/').pop();
 
   if (!filename)
-    throw new Error(`Failed to get filename from ${lastCapture.Path}`);
+    throw new Error(`Failed to get filename from ${capture.Path}`);
 
   const audioBlob = await audioRes.blob();
   const transcribedAudio = await transcribeAudio(audioBlob, filename); 
@@ -204,28 +211,26 @@ const showTeamRadio = async (whClient: WebhookClient, ltClient: F1LiveTimingClie
   let embed = new EmbedBuilder();
 
   if (dl) {
-    const driver = dl[lastCapture.RacingNumber];
+    const driver = dl[capture.RacingNumber];
 
     embed = embed
       .setImage(driver.HeadshotUrl)
       .setTitle(`Team Radio from ${driver.FirstName} ${driver.LastName} (${driver.Tla})`);
   } else
     embed = embed
-      .setTitle(`Team Radio from #${lastCapture.RacingNumber}`);
+      .setTitle(`Team Radio from #${capture.RacingNumber}`);
 
   embed = embed
-    .setTimestamp(timestamp ? new Date(timestamp) : new Date(lastCapture.Utc))
+    .setTimestamp(timestamp ? new Date(timestamp) : new Date(capture.Utc))
     .setDescription(transcribedAudio.replace(/\n/g, ' ').trim());
 
   const attachment = new AttachmentBuilder(Buffer.from(await audioBlob.arrayBuffer()))
     .setName(filename);
 
-  await whClient.send({
-    username: 'Team Radio Bot',
-    avatarURL: 'https://i.imgur.com/AfFp7pu.png',
-    embeds: [embed],
-    files: [attachment],
-  });
+  return {
+    embed: embed,
+    attachment: attachment,
+  };
 };
 
 program
@@ -318,8 +323,38 @@ program
       else if (topic === "AudioStreams")
         await showAudioStreams(webhookClient, ltClient, timestamp);
 
-      else if (topic === "TeamRadio" && ltClient.Current.SessionInfo) 
-        await showTeamRadio(webhookClient, ltClient, timestamp);
+      else if (topic === "TeamRadio" && ltClient.Current.SessionInfo) {
+        const radioData = data as LiveTimingData.TeamRadio | {
+          Captures: {
+            [key: string]: {
+              RacingNumber: string;
+              Utc: string;
+              Path: string;
+            };
+          };
+        };
+
+        const captures: TeamRadioCapture[] = [];
+
+        if (Array.isArray(radioData.Captures))
+          for (const capture of radioData.Captures)
+            captures.push(capture);
+
+        else
+          for (const key of Object.keys(radioData.Captures))
+            captures.push(radioData.Captures[key]);
+
+        for (const capture of captures) {
+          const { embed, attachment } = await createTeamRadioCaptureMsgData(capture, ltClient, timestamp);
+          await webhookClient.send({
+            username: 'Team Radio Bot',
+            avatarURL: 'https://i.imgur.com/AfFp7pu.png',
+            embeds: [embed],
+            files: [attachment],
+          });
+        }
+
+      }
     });
 
     ltClient.Start();
