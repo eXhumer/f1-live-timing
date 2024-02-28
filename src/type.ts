@@ -28,7 +28,7 @@ export namespace F1LiveTiming {
     connected: () => void;
     disconnected: (reason: "failed" | "unauthorized" | "end") => void;
     error: (err: SignalRError) => void;
-    feed: (topic: string, data: unknown, timestamp: string) => void;
+    feed: (topic: keyof LiveTimingData.Current, data: unknown, timestamp: string) => void;
     reconnecting: (count: number) => void;
   };
   
@@ -197,7 +197,24 @@ export namespace LiveTimingData {
   };
 
   export type ChampionshipPrediction = {
-
+    Drivers: {
+      [key: string]: {
+        RacingNumber: string;
+        CurrentPosition: number;
+        PredictedPosition: number;
+        CurrentPoints: number;
+        PredictedPoints: number;
+      };
+    };
+    Teams: {
+      [key: string]: {
+        TeamName: string;
+        CurrentPosition: number;
+        PredictedPosition: number;
+        CurrentPoints: number;
+        PredictedPoints: number;
+      };
+    };
   };
 
   export type LapCount = {
@@ -223,16 +240,23 @@ export namespace LiveTimingData {
   };
 
   export type DriverRaceInfo = {
-
+    [key: string]: {
+      RacingNumber: string;
+      Position: string;
+      Gap: string;
+      Interval: string;
+      PitStops: number;
+      Catching: number;
+      OvertakeState: number;
+      IsOut: boolean;
+    };
   };
 
   export type SPFeed = {
 
   };
 
-  export type TimingDataF1 = {
-
-  };
+  export type TimingDataF1 = TimingData;
 
   export type LapSeries = {
     [key: string]: {
@@ -242,7 +266,74 @@ export namespace LiveTimingData {
   };
 
   export type TimingData = {
-
+    Lines: {
+      [key: string]: {
+        GapToLeader: string;
+        IntervalToPositionAhead: {
+          Value: string;
+          Catching: boolean;
+        };
+        Line: number;
+        Position: string;
+        ShowPosition: boolean;
+        RacingNumber: string;
+        Retired: boolean;
+        InPit: boolean;
+        PitOut: boolean;
+        Stopped: boolean;
+        Status: number;
+        NumberOfLaps: number;
+        NumberOfPitStops: number;
+        Sectors: {
+          Stopped: boolean;
+          PreviousValue: string;
+          Segments: {
+            Status: number;
+          }[];
+          Value: string;
+          Status: number;
+          OverallFastest: boolean;
+          PersonalFastest: boolean;
+        }[];
+        Speeds: {
+          I1: {
+            Value: string;
+            Status: number;
+            OverallFastest: boolean;
+            PersonalFastest: boolean;
+          };
+          I2: {
+            Value: string;
+            Status: number;
+            OverallFastest: boolean;
+            PersonalFastest: boolean;
+          };
+          FL: {
+            Value: string;
+            Status: number;
+            OverallFastest: boolean;
+            PersonalFastest: boolean;
+          };
+          ST: {
+            Value: string;
+            Status: number;
+            OverallFastest: boolean;
+            PersonalFastest: boolean;
+          };
+        };
+        BestLapTime: {
+          Value: string;
+          Lap: number;
+        };
+        LastLapTime: {
+          Value: string;
+          Status: number;
+          OverallFastest: boolean;
+          PersonalFastest: boolean;
+        };
+      };
+    };
+    Withheld: boolean;
   };
 
   export type TeamRadio = {
@@ -254,15 +345,81 @@ export namespace LiveTimingData {
   };
 
   export type TopThree = {
-
+    Withheld: boolean;
+    Lines: {
+      Position: string;
+      ShowPosition: boolean;
+      RacingNumber: string;
+      Tla: string;
+      BroadcastName: string;
+      FullName: string;
+      Team: string;
+      TeamColour: string;
+      LapTime: string;
+      LapState: number;
+      DiffToAhead: string;
+      DiffToLeader: string;
+      OverallFastest: boolean;
+      PersonalFastest: boolean;
+    }[];
   };
 
   export type TimingAppData = {
-
+    Lines: {
+      [key: string]: {
+        RacingNumber: string;
+        Line: number;
+        GridPos: string;
+        Stints: {
+          LapTime: string;
+          LapNumber: number;
+          LapFlags: number;
+          Compound: TyreCompound;
+          New: string;
+          TyresNotChanged: string;
+          TotalLaps: number;
+          StartLaps: number;
+        }[];
+      };
+    };
   };
 
   export type TimingStats = {
-
+    Withheld: boolean;
+    Lines: {
+      [key: string]: {
+        Line: number;
+        RacingNumber: string;
+        PersonalBestLapTime: {
+          Lap: number;
+          Position: number;
+          Value: string;
+        };
+        BestSectors: {
+          Position: number;
+          Value: string;
+        }[];
+        BestSpeeds: {
+          I1: {
+            Position: number;
+            Value: string;
+          };
+          I2: {
+            Position: number;
+            Value: string;
+          };
+          FL: {
+            Position: number;
+            Value: string;
+          };
+          ST: {
+            Position: number;
+            Value: string;
+          };
+        };
+      };
+    };
+    SessionType: string;
   };
 
   export type SessionStatus = {
@@ -337,7 +494,34 @@ export namespace LiveTimingData {
   };
 
   export type Current = {
-
+    SessionInfo?: SessionInfo;
+    ArchiveStatus?: ArchiveStatus;
+    ContentStreams?: ContentStreams;
+    WeatherData?: WeatherData;
+    CarData?: CarData;
+    Position?: Position;
+    TeamRadio?: TeamRadio;
+    DriverList?: DriverList;
+    TrackStatus?: TrackStatus;
+    SessionData?: SessionData;
+    AudioStreams?: AudioStreams;
+    TyreStintSeries?: TyreStintSeries;
+    ExtrapolatedClock?: ExtrapolatedClock;
+    ChampionshipPrediction?: ChampionshipPrediction;
+    LapCount?: LapCount;
+    DriverRaceInfo?: DriverRaceInfo;
+    TimingDataF1?: TimingDataF1;
+    LapSeries?: LapSeries;
+    TimingData?: TimingData;
+    TopThree?: TopThree;
+    TimingAppData?: TimingAppData;
+    TimingStats?: TimingStats;
+    SessionStatus?: SessionStatus;
+    Heartbeat?: Heartbeat;
+    WeatherDataSeries?: WeatherDataSeries;
+    CurrentTyres?: CurrentTyres;
+    TlaRcm?: TlaRcm;
+    RaceControlMessages?: RaceControlMessages;
   };
 }
 

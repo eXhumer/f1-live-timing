@@ -1,11 +1,11 @@
 import { Client as SignalRClient, HubEvent } from "node-signalr";
 
 import { EventEmitter } from "events";
-import { F1LiveTiming } from "./type";
+import { LiveTimingData, F1LiveTiming } from "./type";
 import { deepMerge, decompressZlibData } from "./utils";
 
 export class F1LiveTimingClient extends (EventEmitter as F1LiveTiming.EventEmitter) {
-  public readonly Current: Record<string, unknown>;
+  public readonly Current: LiveTimingData.Current;
   private readonly signalrClient: SignalRClient;
   private readonly streamingHub: string;
 
@@ -23,11 +23,16 @@ export class F1LiveTimingClient extends (EventEmitter as F1LiveTiming.EventEmitt
       .hub
       .on(this.streamingHub, "feed",
           ((topic: string, data: unknown, timestamp: string) => {
-            this.Current[topic] = (topic === "Position.z" || topic === "CarData.z") ?
-              decompressZlibData(data as string) :
-              deepMerge(this.Current[topic], data);
+            if (topic.endsWith(".z") && typeof data === "string")
+              topic = topic.replace(/\.z$/, "");
 
-            this.emit("feed", topic, data, timestamp);
+            const key = topic as keyof LiveTimingData.Current;
+
+            this.Current[key] = (key === "Position" || key === "CarData") ?
+              decompressZlibData(data as string) :
+              deepMerge(this.Current[key], data);
+
+            this.emit("feed", key, data, timestamp);
           }) as HubEvent);
     });
 
@@ -63,7 +68,7 @@ export class F1LiveTimingClient extends (EventEmitter as F1LiveTiming.EventEmitt
       .call(this.streamingHub, "Subscribe", topics) as Record<string, unknown>;
 
     for (const key in current)
-      this.Current[key.replace(/\.z$/, "")] = key.endsWith(".z") ?
+      this.Current[key.replace(/\.z$/, "") as keyof LiveTimingData.Current] = key.endsWith(".z") ?
         decompressZlibData(current[key] as string) :
         current[key];
 
