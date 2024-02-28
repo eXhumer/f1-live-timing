@@ -108,13 +108,52 @@ export namespace LiveTimingData {
     }[];
   };
 
-  export type TrackStatus = {
+  export enum TrackStatusStatus {
+    ALL_CLEAR = "1",
+    YELLOW = "2",
+    GREEN = "3",
+    SC_DEPLOYED = "4",
+    RED = "5",
+    VSC_DEPLOYED = "6",
+    VSC_ENDING = "7",
+  }
 
+  export enum TrackStatusMessage {
+    ALL_CLEAR = "AllClear",
+    YELLOW = "Yellow",
+    GREEN = "Green",
+    SC_DEPLOYED = "SCDeployed",
+    RED = "Red",
+    VSC_DEPLOYED = "VSCDeployed",
+    VSC_ENDING = "VSCEnding",
+  }
+
+  export type TrackStatus = {
+    Status: TrackStatusStatus;
+    Message: TrackStatusMessage;
   };
 
   export type SessionData = {
-
+    Series: {
+      Utc: string;
+      Lap?: number;
+      QualifyingPart?: 0 | 1 | 2 | 3;
+    }[];
+    StatusSeries: {
+      Utc: string;
+      TrackStatus?: TrackStatusMessage;
+      SessionStatus?: SessionStatusStatus;
+    }[];
   };
+
+  export enum SessionStatusStatus {
+    STARTED = "Started",
+    ABORTED = "Aborted",
+    INACTIVE = "Inactive",
+    FINISHED = "Finished",
+    FINALISED = "Finalised",
+    ENDS = "Ends",
+  }
 
   export type AudioStreams = {
     Streams: {
@@ -126,12 +165,35 @@ export namespace LiveTimingData {
     }[];
   };
 
-  export type TyreStintSeries = {
+  export enum TyreCompound {
+    HYPERSOFT = "HYPERSOFT",
+    ULTRASOFT = "ULTRASOFT",
+    SUPERSOFT = "SUPERSOFT",
+    SOFT = "SOFT",
+    MEDIUM = "MEDIUM",
+    HARD = "HARD",
+    INTERMEDIATE = "INTERMEDIATE",
+    WET = "WET",
+    UNKNOWN = "UNKNOWN",
+    TEST_UNKNOWN = "TEST_UNKNOWN",
+  }
 
+  export type TyreStintSeries = {
+    Stints: {
+      [key: string]: {
+        Compound: TyreCompound;
+        New: string;
+        TyresNotChanged: string;
+        TotalLaps: number;
+        StartLaps: number;
+      }[];
+    };
   };
 
   export type ExtrapolatedClock = {
-
+    Utc: string;
+    Remaning: string;
+    Extrapolating: boolean;
   };
 
   export type ChampionshipPrediction = {
@@ -139,7 +201,8 @@ export namespace LiveTimingData {
   };
 
   export type LapCount = {
-
+    CurrentLap: number;
+    TotalLaps: number;
   };
 
   export type DriverList = {
@@ -163,14 +226,19 @@ export namespace LiveTimingData {
 
   };
 
-  export type SPFeed = {};
+  export type SPFeed = {
+
+  };
 
   export type TimingDataF1 = {
 
   };
 
   export type LapSeries = {
-
+    [key: string]: {
+      RacingNumber: string;
+      LapPosition: string[];
+    };
   };
 
   export type TimingData = {
@@ -198,11 +266,11 @@ export namespace LiveTimingData {
   };
 
   export type SessionStatus = {
-
+    Status: SessionStatusStatus;
   };
 
   export type Heartbeat = {
-
+    Utc: string;
   };
 
   export type WeatherData = {
@@ -215,26 +283,54 @@ export namespace LiveTimingData {
     WindSpeed: string;
   };
 
-
   export type WeatherDataSeries = {
-
+    Series: {
+      Timestamp: string;
+      Weather: WeatherData;
+    }[];
   };
-
 
   export type CurrentTyres = {
-
+    Tyres: {
+      [key: string]: {
+        Compound: TyreCompound;
+        New: boolean;
+      };
+    };
   };
-
 
   export type TlaRcm = {
-
+    Timestamp: string;
+    Message: string;
   };
 
+  export enum FlagStatus {
+    CLEAR = "CLEAR",
+    GREEN = "GREEN",
+    RED = "RED",
+    YELLOW = "YELLOW",
+    DOUBLE_YELLOW = "DOUBLE YELLOW",
+    CHEQUERED = "CHEQUERED",
+    BLUE = "BLUE",
+    BLACK = "BLACK",
+    BLACK_AND_WHITE = "BLACK AND WHITE",
+    BLACK_AND_ORANGE = "BLACK AND ORANGE",
+  }
 
   export type RaceControlMessages = {
-
+    Messages: {
+      Utc: string;
+      Lap?: number;
+      Category: "Flag" | "Other" | "SafetyCar" | "Drs" | "CarEvent";
+      Flag?: FlagStatus;
+      Message: string;
+      Sector?: Number;
+      Scope?: "Track" | "Sector" | "Driver";
+      Mode?: "SAFETY CAR" | "VIRTUAL SAFETY CAR";
+      Status?: "DEPLOYED" | "IN THIS LAP" | "DISABLED" | "ENABLED";
+      RacingNumber?: string;
+    }[];
   };
-
 
   export type PitLaneTimeCollection = {
 
