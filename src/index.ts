@@ -195,7 +195,8 @@ const createTeamRadioCaptureMsgData = async (
   const si = ltClient.Current.SessionInfo as LiveTimingData.SessionInfo;
   const dl = ltClient.Current.DriverList as LiveTimingData.DriverList | undefined;
 
-  const audioRes = await fetch(`https://livetiming.formula1.com/static/${si.Path}${capture.Path}`);
+  const audioUrl = `https://livetiming.formula1.com/static/${si.Path}${capture.Path}`;
+  const audioRes = await fetch(audioUrl);
 
   if (audioRes.status !== 200)
     throw new Error(`Failed to fetch audio from ${si.Path}${capture.Path}`);
@@ -214,15 +215,15 @@ const createTeamRadioCaptureMsgData = async (
     const driver = dl[capture.RacingNumber];
 
     embed = embed
-      .setImage(driver.HeadshotUrl)
+      .setAuthor({ name: `${driver.FirstName} ${driver.LastName} (${driver.Tla})`, iconURL: driver.HeadshotUrl })
       .setTitle(`Team Radio from ${driver.FirstName} ${driver.LastName} (${driver.Tla})`);
-  } else
-    embed = embed
-      .setTitle(`Team Radio from #${capture.RacingNumber}`);
+  }
 
   embed = embed
+    .setTitle(`Team Radio from #${capture.RacingNumber}`)
     .setTimestamp(timestamp ? new Date(timestamp) : new Date(capture.Utc))
-    .setDescription(transcribedAudio.replace(/\n/g, ' ').trim());
+    .setDescription(transcribedAudio.replace(/\n/g, ' ').trim())
+    .setURL(audioUrl);
 
   const attachment = new AttachmentBuilder(Buffer.from(await audioBlob.arrayBuffer()))
     .setName(filename);
@@ -325,12 +326,8 @@ program
 
       else if (topic === "TeamRadio" && ltClient.Current.SessionInfo) {
         const radioData = data as LiveTimingData.TeamRadio | {
-          Captures: {
-            [key: string]: {
-              RacingNumber: string;
-              Utc: string;
-              Path: string;
-            };
+          Captures?: {
+            [key: string]: TeamRadioCapture;
           };
         };
 
@@ -341,8 +338,9 @@ program
             captures.push(capture);
 
         else
-          for (const key of Object.keys(radioData.Captures))
-            captures.push(radioData.Captures[key]);
+          if (radioData.Captures)
+            for (const key of Object.keys(radioData.Captures))
+              captures.push(radioData.Captures[key]);
 
         for (const capture of captures) {
           const { embed, attachment } = await createTeamRadioCaptureMsgData(capture, ltClient, timestamp);
@@ -360,21 +358,43 @@ program
     ltClient.Start();
 
     let callAmount = 0;
-    process.on('SIGINT', () => {
-      if(callAmount < 1 && ltClient.ConnectionState() === "Connected") {
-        webhookClient.send({
-          content: "Cleaning up before exiting",
-          username: 'Cleanup Bot',
-          avatarURL: 'https://i.imgur.com/AfFp7pu.png',
-        });
 
-        ltClient
-          .Unsubscribe(options.topics)
-          .finally(ltClient.End);
+    const exitHandler = async (
+      opts: { cleanup?: boolean, exit?: boolean },
+      exitCodeOrSignalOrError?: number | string | Error,
+    ) => {
+      if (opts.cleanup) {
+        if(callAmount < 1 && ltClient.ConnectionState() === "Connected") {
+          await webhookClient.send({
+            content: "Cleaning up before exiting",
+            username: 'Cleanup Bot',
+            avatarURL: 'https://i.imgur.com/AfFp7pu.png',
+          });
+
+          ltClient
+            .Unsubscribe(options.topics)
+            .finally(ltClient.End);
+        }
+  
+        callAmount++;
       }
 
-      callAmount++;
-    });
+      if (opts.exit)
+        process.exit();
+    };
+
+    // do something when app is closing
+    process.on('exit', code => exitHandler({ cleanup: true }, code));
+
+    // catches ctrl+c event
+    process.on('SIGINT', signal => exitHandler({ exit: true }, signal));
+
+    // catches "kill pid" (for example: nodemon restart)
+    process.on('SIGUSR1', signal => exitHandler({ exit: true }, signal));
+    process.on('SIGUSR2', signal => exitHandler({ exit: true }, signal));
+
+    // catches uncaught exceptions
+    process.on('uncaughtException', error => exitHandler({ exit: true }, error));
   });
 
 program

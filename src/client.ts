@@ -28,9 +28,12 @@ export class F1LiveTimingClient extends (EventEmitter as F1LiveTiming.EventEmitt
 
             const key = topic as keyof LiveTimingData.Current;
 
+            console.debug("received", data);
+            console.debug("current", this.Current[key]);
+
             this.Current[key] = (key === "Position" || key === "CarData") ?
               decompressZlibData(data as string) :
-              deepMerge(this.Current[key], data);
+              deepMerge(!this.Current[key] ? {} : this.Current[key], data);
 
             this.emit("feed", key, data, timestamp);
           }) as HubEvent);

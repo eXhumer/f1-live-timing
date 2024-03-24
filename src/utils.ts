@@ -63,19 +63,23 @@ export const transcribeAudio = async (
   audioFileName: string,
   transcriberUrl: string = "http://127.0.0.1:8080/inference",
 ) => {
-  const formData = new FormData();
-  formData.append("file", audioBlob, audioFileName);
-  formData.append("response_type", "json");
+  for (let retryCount = 0; retryCount < 3; retryCount++) {
+    const formData = new FormData();
+    formData.append("file", audioBlob, audioFileName);
+    formData.append("response_type", "json");
 
-  const res = await fetch(transcriberUrl, { method: "POST", body: formData });
+    const res = await fetch(transcriberUrl, { method: "POST", body: formData });
 
-  if (res.status !== 200)
-    throw new Error(`Transcriber server returned status code ${res.status}`);
+    if (res.status !== 200)
+      throw new Error(`Transcriber server returned status code ${res.status}`);
 
-  const data = await res.json();
+    const data = await res.json();
 
-  if (!data.text)
-    throw new Error("Transcriber server did not return any text");
+    if (data.text)
+      return data.text as string;
 
-  return data.text as string;
+    console.warn("Transcriber server returned empty response, retrying...");
+  }
+
+  throw new Error("Transcriber server didn't send any text for audio");
 };
