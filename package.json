@@ -1,7 +1,7 @@
 {
   "name": "@exhumer/f1-live-timing",
   "version": "0.0.1",
-  "description": "Unofficial F1 live timing client",
+  "description": "Unofficial F1 live timing client for JavaScript/TypeScript",
   "main": "dist/library.js",
   "types": "dist/library.d.ts",
   "scripts": {
@@ -15,6 +15,13 @@
   "author": {
     "name": "eXhumer",
     "email": "exhumer1@protonmail.com"
+  },
+  "files": [
+    "dist/*",
+    "src/*"
+  ],
+  "publishConfig": {
+    "access": "public"
   },
   "license": "AGPL-3.0-only",
   "devDependencies": {
