@@ -3,10 +3,10 @@
   "version": "0.0.1",
   "description": "Unofficial F1 live timing client",
   "main": "dist/library.js",
+  "types": "dist/library.d.ts",
   "scripts": {
     "clean": "rimraf dist",
-    "build": "npm run clean && rollup -c",
-    "postinstall": "patch-package"
+    "build": "npm run clean && rollup -c"
   },
   "repository": {
     "type": "git",
@@ -28,7 +28,6 @@
     "typescript": "^5.4.3"
   },
   "dependencies": {
-    "node-signalr": "^3.0.0-alpha.1",
-    "patch-package": "^8.0.0"
+    "@exhumer/node-signalr": "^3.1.0-alpha.2"
   }
 }

@@ -1,4 +1,4 @@
-import { Client, HubEvent } from "node-signalr";
+import { Client, HubEvent } from "@exhumer/node-signalr";
 
 export abstract class AbstractF1LiveTimingClient extends Client {
   constructor(url: string = "https://livetiming.formula1.com/signalr") {
