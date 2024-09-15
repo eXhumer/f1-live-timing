@@ -19,7 +19,8 @@
   "files": [
     "lib/**.d.ts",
     "lib/**.js",
-    "lib/**.map"
+    "lib/**.map",
+    "lib/**.ts"
   ],
   "packageManager": "yarn@1.22.22",
   "publishConfig": {
