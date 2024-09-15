@@ -144,7 +144,6 @@ export abstract class AbstractF1LiveTimingClient {
    * @returns A Promise that resolves with the result of the unsubscription, or rejects with an error.
    */
   public unsubscribe(topics: string[]): Promise<any> {
-    this.#connection.onclose = () => {};
     return this.#connection.invoke('Unsubscribe', topics);
   }
 };
