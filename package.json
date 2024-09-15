@@ -1,6 +1,6 @@
 {
   "name": "@exhumer/f1-live-timing",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Unofficial F1 live timing client for JavaScript/TypeScript",
   "main": "lib/library.js",
   "types": "lib/library.d.ts",
