@@ -2,11 +2,11 @@
   "name": "@exhumer/f1-live-timing",
   "version": "0.0.1",
   "description": "Unofficial F1 live timing client for JavaScript/TypeScript",
-  "main": "dist/library.js",
-  "types": "dist/library.d.ts",
+  "main": "lib/library.js",
+  "types": "lib/library.d.ts",
   "scripts": {
-    "clean": "rimraf dist",
-    "build": "npm run clean && rollup -c"
+    "clean": "rimraf --glob lib/**/*.js lib/**/*.d.ts lib/**/*.map",
+    "build": "yarn clean && tsc"
   },
   "repository": {
     "type": "git",
@@ -17,24 +17,22 @@
     "email": "exhumer1@protonmail.com"
   },
   "files": [
-    "dist/*",
-    "src/*"
+    "lib/**.d.ts",
+    "lib/**.js",
+    "lib/**.map"
   ],
+  "packageManager": "yarn@1.22.22",
   "publishConfig": {
     "access": "public"
   },
   "license": "AGPL-3.0-only",
   "devDependencies": {
-    "@rollup/plugin-commonjs": "^25.0.7",
-    "@rollup/plugin-node-resolve": "^15.2.3",
-    "@rollup/plugin-terser": "^0.4.4",
-    "@rollup/plugin-typescript": "^11.1.6",
-    "rimraf": "^5.0.5",
-    "rollup": "^4.13.1",
+    "@types/node": "^22.5.5",
+    "rimraf": "^5.0.10",
     "ts-node": "^10.9.2",
-    "typescript": "^5.4.3"
+    "typescript": "^5.6.2"
   },
   "dependencies": {
-    "@exhumer/node-signalr": "^3.1.0-alpha.2"
+    "@microsoft/signalr": "^8.0.7"
   }
 }
