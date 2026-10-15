@@ -1,0 +1,41 @@
+{
+  "compilerOptions": {
+    /* ── Language & Environment ──────────────────────────────────────────── */
+    "target": "ES2022",
+    "lib": ["ES2022", "ES2023.Array", "ESNext.Disposable"],
+    "module": "node16",
+    "moduleResolution": "node16",
+
+    /* ── Type Checking (all strict flags + extras) ───────────────────────── */
+    "strict": true,
+    "exactOptionalPropertyTypes": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "noPropertyAccessFromIndexSignature": true,
+    "noFallthroughCasesInSwitch": true,
+    "noImplicitReturns": true,
+    "allowUnreachableCode": false,
+    "allowUnusedLabels": false,
+
+    /* ── Emit ────────────────────────────────────────────────────────────── */
+    "declaration": true,
+    "declarationMap": true,
+    "sourceMap": true,
+    "outDir": "./dist/esm",
+    "rootDir": "./src",
+
+    /* ── Interop ─────────────────────────────────────────────────────────── */
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true,
+    "verbatimModuleSyntax": false,
+
+    /* ── Library compatibility ───────────────────────────────────────────── */
+    // @exhumer/signalr-client re-exports tough-cookie and
+    // @exhumer/undici-cookie-agent, whose declarations reference DOM globals.
+    "skipLibCheck": true,
+
+    "types": ["node"]
+  },
+  "include": ["src/**/*"],
+  "exclude": ["node_modules", "dist"]
+}

@@ -1,0 +1,13 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    /* Tests are consumed by vitest (which acts as a bundler), so node16 / ESM
+       resolution is fine - all imports already carry .js extensions. */
+    "rootDir": ".",
+    "noEmit": true
+  },
+  "include": ["src/**/*", "tests/unit/**/*", "tests/helpers/**/*"],
+  /* Package-consumer fixtures import through package.json exports and require
+     a completed build. They are checked separately by typecheck:package. */
+  "exclude": ["tests/types/**/*"]
+}

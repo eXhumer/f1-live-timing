@@ -1,0 +1,9 @@
+/dist/
+/node_modules/
+/.vscode/
+._*
+.DS_Store
+
+# Coverage reports
+coverage/
+test-report.junit.xml
