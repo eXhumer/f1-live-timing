@@ -56,7 +56,7 @@ const live = await LiveClient.connect({ authToken: subscriptionToken });
 const timeline = Timeline.fromLive(live);
 
 const cursor = timeline.cursor();
-timeline.subscribe(() => cursor.advanceTo(timeline.last!));
+cursor.follow(); // stay on the newest data as it arrives
 cursor.subscribe(['TrackStatus', 'RaceControlMessages'], (changed) => {
   for (const topic of changed) console.log(topic, cursor.get(topic));
 });
@@ -139,6 +139,7 @@ A `Cursor` is a position on the timeline:
 | --- | --- |
 | `advanceTo(utc)` | Playback. Applies only the messages since the last call. Moving backwards behaves like `seek`. |
 | `seek(utc)` | Jumps, rebuilding the state from the nearest checkpoint. Subscribers get `reset: true`. |
+| `follow()` | Moves to the latest message and keeps advancing as new messages are inserted. `advanceTo` or `seek` stops it; `following` says whether it is on. |
 | `state`, `get(topic)` | The merged state at the cursor. |
 | `subscribe(topic, cb)` | `cb(state, { updates, reset })` once per move that touched the topic. |
 | `subscribe(topics, cb)` | `cb(changedTopics, reset)` once per move that touched any of them. |

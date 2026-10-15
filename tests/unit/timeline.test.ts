@@ -164,4 +164,69 @@ describe('Cursor', () => {
     expect(() => other.seek(1)).toThrow();
     timeline.insert([lap(1, 0)]);
   });
+
+  it('follows the end of the timeline', () => {
+    const { timeline, cursor } = setup();
+    const laps = vi.fn();
+    cursor.subscribe('LapCount', laps);
+    cursor.follow();
+    expect(cursor.following).toBe(true);
+    expect(cursor.time).toBe(30);
+    expect(laps).toHaveBeenLastCalledWith({ CurrentLap: 3 }, { updates: [lap(10, 1), lap(20, 2), lap(30, 3)], reset: false });
+
+    timeline.insert([lap(40, 4)]);
+    expect(cursor.time).toBe(40);
+    expect(laps).toHaveBeenLastCalledWith({ CurrentLap: 4 }, { updates: [lap(40, 4)], reset: false });
+
+    timeline.insert([lap(25, 9)]);
+    expect(laps.mock.lastCall?.[1].reset).toBe(true);
+    expect(cursor.get('LapCount')).toEqual({ CurrentLap: 4 });
+
+    cursor.seek(15);
+    expect(cursor.following).toBe(false);
+    timeline.insert([lap(50, 5)]);
+    expect(cursor.time).toBe(15);
+
+    cursor.follow();
+    cursor.advanceTo(55);
+    expect(cursor.following).toBe(false);
+    timeline.insert([lap(60, 6)]);
+    expect(cursor.get('LapCount')).toEqual({ CurrentLap: 5 });
+  });
+
+  it('follows an empty timeline until data arrives', () => {
+    const timeline = new Timeline();
+    const cursor = timeline.cursor();
+    cursor.follow();
+    expect(cursor.time).toBe(-Infinity);
+    const listener = vi.fn(() => expect(cursor.get('LapCount')).toEqual({ CurrentLap: 1 }));
+    timeline.subscribe(listener);
+    timeline.insert([lap(1, 1)]);
+    expect(listener).toHaveBeenCalled();
+    cursor.dispose();
+    expect(cursor.following).toBe(false);
+    expect(() => cursor.follow()).toThrow('Cursor is disposed.');
+  });
+
+  it('keeps inserting when a following subscriber throws', () => {
+    const timeline = new Timeline();
+    const a = timeline.cursor();
+    const b = timeline.cursor();
+    const c = timeline.cursor();
+    const ok = vi.fn();
+    a.subscribe('LapCount', () => {
+      throw new Error('a');
+    });
+    c.subscribe('LapCount', ok);
+    a.follow();
+    c.follow();
+    expect(() => timeline.insert([lap(1, 1)])).toThrow('a');
+    expect(ok).toHaveBeenCalled();
+    expect(timeline.size).toBe(1);
+    b.follow();
+    b.subscribe('LapCount', () => {
+      throw new Error('b');
+    });
+    expect(() => timeline.insert([lap(2, 2)])).toThrow(AggregateError);
+  });
 });

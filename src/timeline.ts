@@ -123,7 +123,16 @@ export class Timeline {
     this.#invalidate(firstIndex);
     this.#advanceHead();
     for (const cursor of this.#cursors) cursor._inserted(firstIndex);
+    const errors: unknown[] = [];
+    for (const cursor of [...this.#cursors]) {
+      try {
+        cursor._follow();
+      } catch (error) {
+        errors.push(error);
+      }
+    }
     for (const listener of [...this.#listeners]) listener(this);
+    throwAll(errors, 'Following cursor subscribers threw.');
   }
 
   /** @internal */
@@ -241,6 +250,7 @@ export class Cursor implements Disposable {
   #time = -Infinity;
   #state: SessionState = EMPTY_STATE;
   #stale = false;
+  #following = false;
   #disposed = false;
 
   /** @internal Use {@link Timeline.cursor}. */
@@ -263,15 +273,43 @@ export class Cursor implements Disposable {
     return this.#state[topic] as TopicState<T> | undefined;
   }
 
+  /** `true` while the cursor follows the end of the timeline (see {@link follow}). */
+  get following(): boolean {
+    return this.#following;
+  }
+
+  /**
+   * Move to the latest message and stay there: after every insert the cursor
+   * advances to the timeline's last message, calling subscribers as
+   * {@link advanceTo} does. {@link advanceTo} or {@link seek} stops following.
+   */
+  follow(): void {
+    this.#assertOpen();
+    this.#following = true;
+    this.#advance(this.#timeline.last ?? -Infinity);
+  }
+
   /**
    * Move forward to `utc`, applying only messages after the current time.
    * Moving backwards, or after messages were inserted behind the cursor,
-   * behaves like {@link seek}.
+   * behaves like {@link seek}. Stops {@link follow}ing.
    */
   advanceTo(utc: number): void {
     this.#assertOpen();
+    this.#following = false;
+    this.#advance(utc);
+  }
+
+  /** Jump to `utc` and rebuild the state from the nearest checkpoint. Stops {@link follow}ing. */
+  seek(utc: number): void {
+    this.#assertOpen();
+    this.#following = false;
+    this.#seek(utc);
+  }
+
+  #advance(utc: number): void {
     if (utc < this.#time || this.#stale) {
-      this.seek(utc);
+      this.#seek(utc);
       return;
     }
     const end = this.#timeline._end(utc);
@@ -290,9 +328,7 @@ export class Cursor implements Disposable {
     if (updates.size > 0) this.#notify(updates, false);
   }
 
-  /** Jump to `utc` and rebuild the state from the nearest checkpoint. */
-  seek(utc: number): void {
-    this.#assertOpen();
+  #seek(utc: number): void {
     const end = this.#timeline._end(utc);
     const checkpoint = this.#timeline._checkpointBefore(end);
     let state = checkpoint.state;
@@ -324,12 +360,18 @@ export class Cursor implements Disposable {
   /** Stop receiving inserts from the timeline and drop every subscriber. */
   dispose(): void {
     this.#disposed = true;
+    this.#following = false;
     this.#subscriptions.clear();
     this.#timeline._detach(this);
   }
 
   [Symbol.dispose](): void {
     this.dispose();
+  }
+
+  /** @internal Called by the timeline after every insert. */
+  _follow(): void {
+    if (this.#following) this.#advance(this.#timeline.last!);
   }
 
   /** @internal Called by the timeline after an insert at `index`. */
@@ -362,9 +404,13 @@ export class Cursor implements Disposable {
         errors.push(error);
       }
     }
-    if (errors.length === 1) throw errors[0];
-    if (errors.length > 1) throw new AggregateError(errors, 'Cursor subscribers threw.');
+    throwAll(errors, 'Cursor subscribers threw.');
   }
+}
+
+function throwAll(errors: readonly unknown[], message: string): void {
+  if (errors.length === 1) throw errors[0];
+  if (errors.length > 1) throw new AggregateError(errors, message);
 }
 
 function isSorted(batch: readonly LiveTimingMessage[]): boolean {

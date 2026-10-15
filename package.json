@@ -1,6 +1,6 @@
 {
   "name": "@exhumer/f1-live-timing",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "description": "F1 live timing client for Node.js: live SignalR Core feed, archive replay and a UTC timeline for syncing with video",
   "type": "module",
   "author": {
