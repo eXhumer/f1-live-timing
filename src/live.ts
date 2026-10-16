@@ -65,7 +65,8 @@ export class LiveClient {
   readonly #messageListeners = new Set<MessageListener>();
   readonly #statusListeners = new Set<StatusListener>();
   readonly #queues = new Set<MessageQueue>();
-  #snapshot: readonly LiveTimingMessage[] | undefined;
+  #snapshot: readonly LiveTimingMessage[] = [];
+  #subscribed = false;
   #status: LiveStatus = 'connecting';
   #closing = false;
 
@@ -101,7 +102,7 @@ export class LiveClient {
    * Empty when the hub sent nothing.
    */
   get snapshot(): readonly LiveTimingMessage[] {
-    return this.#snapshot ?? [];
+    return this.#snapshot;
   }
 
   /** Current connection status. */
@@ -177,7 +178,10 @@ export class LiveClient {
         messages.push(this.#message(wire, { ...data, _kf: true }, utc, value));
       }
     }
-    this.#snapshot ??= messages;
+    if (!this.#subscribed) {
+      this.#subscribed = true;
+      this.#snapshot = messages;
+    }
     for (const message of messages) this.#emit(message);
   }
 
