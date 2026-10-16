@@ -56,6 +56,7 @@ import { LiveClient, Timeline } from '@exhumer/f1-live-timing';
 
 const live = await LiveClient.connect({ authToken: subscriptionToken });
 const timeline = Timeline.fromLive(live);
+timeline.insert(live.snapshot); // the state at connect time, delivered before you could listen
 
 const cursor = timeline.cursor();
 cursor.follow(); // stay on the newest data as it arrives
@@ -80,6 +81,7 @@ import { LiveClient, loadRecording, Recorder } from '@exhumer/f1-live-timing';
 
 const live = await LiveClient.connect({ authToken, raw: true });
 const recorder = await Recorder.create('./recordings/singapore-race');
+for (const message of live.snapshot) recorder.write(message);
 live.subscribeMessages((message) => recorder.write(message));
 
 // When the session ends
@@ -207,14 +209,16 @@ Options: `authToken`, `topics` (default `LIVE_TOPICS`), `url`, `dispatcher`,
 `logger`, `raw`, and `connectionFactory` (for tests or a custom transport).
 
 Resolves after the subscription snapshot arrives. The snapshot is delivered as
-one keyframe per topic, and a reconnect subscribes again and delivers a fresh
-snapshot.
+one keyframe per topic before `connect` resolves, so a listener added
+afterwards never sees it: read it from `live.snapshot`. A reconnect subscribes
+again and delivers a fresh snapshot to listeners.
 
 | Member | Use |
 | --- | --- |
 | `subscribeMessages(cb)` | Every message. Returns an unsubscribe function. |
 | `messages()` | The same as an async iterator, ending when the client closes. |
 | `subscribeStatus(cb)` | `'connecting' \| 'connected' \| 'reconnecting' \| 'closed'`. |
+| `snapshot` | The connect-time snapshot: one keyframe message per topic. |
 | `status`, `topics`, `skippedTopics` | Current state. |
 | `close()` | Unsubscribes and stops the connection. |
 

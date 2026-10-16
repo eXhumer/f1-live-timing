@@ -50,8 +50,9 @@ type StatusListener = (status: LiveStatus, error?: Error) => void;
  *
  * {@link LiveClient.connect} resolves once the subscription snapshot has
  * arrived. The snapshot is delivered as one keyframe message per topic, then
- * each `feed` update as a message. After a reconnect the client subscribes
- * again and delivers a fresh snapshot.
+ * each `feed` update as a message. Listeners added after `connect` resolves
+ * miss that first snapshot; read it from {@link LiveClient.snapshot}. After a
+ * reconnect the client subscribes again and delivers a fresh snapshot.
  */
 export class LiveClient {
   /** Topics actually subscribed to. */
@@ -64,6 +65,7 @@ export class LiveClient {
   readonly #messageListeners = new Set<MessageListener>();
   readonly #statusListeners = new Set<StatusListener>();
   readonly #queues = new Set<MessageQueue>();
+  #snapshot: readonly LiveTimingMessage[] | undefined;
   #status: LiveStatus = 'connecting';
   #closing = false;
 
@@ -88,6 +90,18 @@ export class LiveClient {
     const client = new LiveClient(connection, topics, skipped, options.raw ?? false);
     await client.#start();
     return client;
+  }
+
+  /**
+   * The snapshot received while connecting: one keyframe message per topic, all
+   * stamped with the same time. {@link LiveClient.connect} delivers it to
+   * listeners before it resolves, so a listener added afterwards never sees
+   * it; insert it into a timeline or recording from here. Snapshots after a
+   * reconnect are delivered to listeners as usual and do not replace this one.
+   * Empty when the hub sent nothing.
+   */
+  get snapshot(): readonly LiveTimingMessage[] {
+    return this.#snapshot ?? [];
   }
 
   /** Current connection status. */
@@ -154,13 +168,17 @@ export class LiveClient {
       'Subscribe',
       this.topics.map(toWireTopic),
     );
-    if (!isPlainObject(snapshot)) return;
-    const decoded = Object.entries(snapshot).map(([wire, value]) => [wire, value, decodeTopicData(wire, value)] as const);
-    const utc = snapshotTime(new Map(decoded.map(([wire, , data]) => [fromWireTopic(wire), data])));
-    for (const [wire, value, data] of decoded) {
-      if (!isPlainObject(data)) continue;
-      this.#emit(this.#message(wire, { ...data, _kf: true }, utc, value));
+    const messages: LiveTimingMessage[] = [];
+    if (isPlainObject(snapshot)) {
+      const decoded = Object.entries(snapshot).map(([wire, value]) => [wire, value, decodeTopicData(wire, value)] as const);
+      const utc = snapshotTime(new Map(decoded.map(([wire, , data]) => [fromWireTopic(wire), data])));
+      for (const [wire, value, data] of decoded) {
+        if (!isPlainObject(data)) continue;
+        messages.push(this.#message(wire, { ...data, _kf: true }, utc, value));
+      }
     }
+    this.#snapshot ??= messages;
+    for (const message of messages) this.#emit(message);
   }
 
   #onFeed(wire: string, data: unknown, timestamp: string | undefined): void {

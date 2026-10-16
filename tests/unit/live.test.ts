@@ -91,6 +91,36 @@ describe('LiveClient', () => {
     expect(timeline.telemetry.drivers().length).toBeGreaterThan(0);
   });
 
+  it('keeps the connect-time snapshot for listeners that attach later', async () => {
+    const { snapshot } = liveFeed();
+    const { client, hub } = await connect({ authToken: 't', raw: true });
+    expect(client.snapshot.map((m) => m.topic).sort()).toEqual(
+      Object.keys(snapshot).map((w) => w.replace(/\.z$/, '')).sort(),
+    );
+    expect(client.snapshot.every((m) => (m.data as { _kf?: boolean })._kf === true)).toBe(true);
+    expect(new Set(client.snapshot.map((m) => m.utc)).size).toBe(1);
+    expect(client.snapshot.some((m) => m.topic === 'CarData' && typeof m.raw === 'string')).toBe(true);
+
+    // Inserting it into a timeline that was created after connect gives the full state.
+    const timeline = Timeline.fromLive(client);
+    timeline.insert(client.snapshot);
+    for (const [topic, data, ts] of liveFeed().feeds) hub.feed(topic, data, ts);
+    timeline[Symbol.dispose]();
+    expect(timeline.size).toBe(client.snapshot.length + liveFeed().feeds.length);
+  });
+
+  it('does not replace the snapshot after a reconnect, and is empty when the hub sent nothing', async () => {
+    const { client, hub } = await connect({ authToken: 't' });
+    const first = client.snapshot;
+    hub.reconnected?.('id');
+    await vi.waitFor(() => expect(hub.invocations.filter(([method]) => method === 'Subscribe')).toHaveLength(2));
+    expect(client.snapshot).toBe(first);
+
+    const empty = new FakeHub();
+    empty.snapshot = null;
+    expect((await LiveClient.connect({ connectionFactory: () => empty })).snapshot).toEqual([]);
+  });
+
   it('delivers a fresh snapshot as keyframes after a reconnect', async () => {
     const { snapshot } = liveFeed();
     const { client, hub } = await connect({ authToken: 't' });
