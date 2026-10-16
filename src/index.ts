@@ -1,4 +1,5 @@
 export {
+  ArchiveAuthError,
   ArchiveClient,
   ArchiveHttpError,
   ArchiveNotFoundError,

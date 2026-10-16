@@ -10,7 +10,8 @@ local recordings, all as one timeline you can scrub in step with a video.
 - Live data comes from `livetiming.formula1.com/signalrcore` through
   [`@exhumer/signalr-client`](https://github.com/eXhumer/signalr-client-ts).
 - Archived sessions come from `livetiming.formula1.com/static` through
-  [undici](https://github.com/nodejs/undici).
+  [undici](https://github.com/nodejs/undici). The archive needs the F1
+  subscription token (`authToken`), like the live `CarData` and `Position`.
 - `CarData` and `Position` arrive inflated. You never handle the `.z`
   base64/deflate payloads unless you ask for them.
 
@@ -31,7 +32,8 @@ npm install @exhumer/f1-live-timing
 ```ts
 import { ArchiveClient, loadReplay } from '@exhumer/f1-live-timing';
 
-const archive = new ArchiveClient();
+// The archive wants the same F1 subscription token as the live feed.
+const archive = new ArchiveClient({ authToken: subscriptionToken });
 const season = await archive.season(2026);
 const race = season.Meetings.at(-1)!.Sessions.find((s) => s.Type === 'Race')!;
 
@@ -165,8 +167,14 @@ their previous value. The DRS channel is absent from 2026 onwards.
 ### `ArchiveClient`
 
 ```ts
-new ArchiveClient({ baseUrl?, dispatcher?, headers? })
+new ArchiveClient({ baseUrl?, dispatcher?, authToken?, headers? })
 ```
+
+`authToken` is the F1 subscription token (the `subscriptionToken` in the
+`login-session` cookie, the same value `LiveClient` takes). It is sent as
+`Authorization: Bearer <token>`; `headers` are merged on top, so an explicit
+`authorization` header wins. F1 answers the archive with HTTP 401 without a
+valid token.
 
 | Method | Returns |
 | --- | --- |
@@ -182,8 +190,9 @@ new ArchiveClient({ baseUrl?, dispatcher?, headers? })
 | `streamStart(path)` | The UTC instant of stream offset zero. |
 | `url(path)` | The absolute URL of any archive file (team radio clips, for example). |
 
-Missing files throw `ArchiveNotFoundError` (S3 answers 403); other statuses
-throw `ArchiveHttpError`.
+Missing files throw `ArchiveNotFoundError` (S3 answers 403). HTTP 401 throws
+`ArchiveAuthError`, whose `hadToken` tells a rejected (expired) token from a
+missing one. It extends `ArchiveHttpError`, which other statuses throw.
 
 ### `loadReplay(archive, path, options?)`
 

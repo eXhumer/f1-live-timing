@@ -73,7 +73,15 @@ export interface ArchiveClientOptions {
   readonly baseUrl?: string;
   /** undici dispatcher for every request (proxy, mock, shared pool). */
   readonly dispatcher?: Dispatcher;
-  /** Extra headers for every request. */
+  /**
+   * F1 subscription token (the `subscriptionToken` of the F1 login, the same
+   * value as {@link LiveClientOptions.authToken}), sent as
+   * `Authorization: Bearer <token>`. The archive rejects requests without a
+   * valid one with HTTP 401 ({@link ArchiveAuthError}). A leading `Bearer ` is
+   * accepted and ignored.
+   */
+  readonly authToken?: string;
+  /** Extra headers for every request. They win over {@link ArchiveClientOptions.authToken}. */
   readonly headers?: Record<string, string>;
 }
 
@@ -94,9 +102,25 @@ export class ArchiveNotFoundError extends Error {
 
 /** Any other unexpected HTTP status from the archive. */
 export class ArchiveHttpError extends Error {
-  override readonly name = 'ArchiveHttpError';
+  override readonly name: string = 'ArchiveHttpError';
   constructor(readonly url: string, readonly statusCode: number) {
     super(`Archive request failed (HTTP ${statusCode}): ${url}`);
+  }
+}
+
+/**
+ * The archive refused the request (HTTP 401): it needs a valid F1 subscription
+ * token ({@link ArchiveClientOptions.authToken}). Extends {@link ArchiveHttpError},
+ * so code that catches that keeps working.
+ */
+export class ArchiveAuthError extends ArchiveHttpError {
+  override readonly name: string = 'ArchiveAuthError';
+  /** Whether the client sent a token, i.e. the token was rejected (expired or invalid), not missing. */
+  constructor(url: string, statusCode: number, readonly hadToken: boolean) {
+    super(url, statusCode);
+    this.message = hadToken
+      ? `Archive rejected the authToken (HTTP ${statusCode}); it may have expired: ${url}`
+      : `Archive needs an authToken (HTTP ${statusCode}): ${url}`;
   }
 }
 
@@ -106,18 +130,22 @@ const FIRST_LINE_MAX_BYTES = 1_048_576;
 
 /**
  * Client for the live timing static archive (`livetiming.formula1.com/static`).
- * The archive is public and needs no login.
+ * F1 now answers it with HTTP 401 unless the request carries the subscription
+ * token, so pass `authToken` (a request without one throws {@link ArchiveAuthError}).
  */
 export class ArchiveClient {
   readonly #baseUrl: string;
   readonly #dispatcher: Dispatcher | undefined;
   readonly #headers: Record<string, string>;
+  readonly #hasToken: boolean;
 
   constructor(options: ArchiveClientOptions = {}) {
     const base = options.baseUrl ?? STATIC_BASE_URL;
     this.#baseUrl = base.endsWith('/') ? base : `${base}/`;
     this.#dispatcher = options.dispatcher;
-    this.#headers = options.headers ?? {};
+    const token = options.authToken?.trim().replace(/^bearer\s+/i, '');
+    this.#headers = { ...(token ? { authorization: `Bearer ${token}` } : {}), ...options.headers };
+    this.#hasToken = Object.keys(this.#headers).some((name) => name.toLowerCase() === 'authorization');
   }
 
   /** Absolute URL of an archive path, e.g. a team radio clip or commentary playlist. */
@@ -245,6 +273,7 @@ export class ArchiveClient {
     if (response.statusCode === 403 || response.statusCode === 404) {
       throw new ArchiveNotFoundError(url, response.statusCode);
     }
+    if (response.statusCode === 401) throw new ArchiveAuthError(url, response.statusCode, this.#hasToken);
     throw new ArchiveHttpError(url, response.statusCode);
   }
 }

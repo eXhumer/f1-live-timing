@@ -4,6 +4,7 @@ import { getGlobalDispatcher, MockAgent, setGlobalDispatcher } from 'undici';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import {
+  ArchiveAuthError,
   ArchiveClient,
   ArchiveHttpError,
   ArchiveNotFoundError,
@@ -112,6 +113,78 @@ describe('ArchiveClient streams', () => {
       ArchiveHttpError,
     );
     await failing.close();
+  });
+});
+
+describe('ArchiveClient authToken', () => {
+  /** An agent that records the request headers and answers with `status`. */
+  function recording(status: number) {
+    const seen: Array<Record<string, string>> = [];
+    const mock = new MockAgent();
+    mock.disableNetConnect();
+    mock
+      .get('https://livetiming.formula1.com')
+      .intercept({ path: () => true })
+      .reply((options) => {
+        seen.push(options.headers as Record<string, string>);
+        return { statusCode: status, data: status === 200 ? '{"Years":[]}' : '' };
+      })
+      .persist();
+    return { mock, seen };
+  }
+
+  it('sends the token as a Bearer Authorization header', async () => {
+    const { mock, seen } = recording(200);
+    await new ArchiveClient({ dispatcher: mock, authToken: 'tok.en.value' }).index();
+    expect(seen[0]?.['authorization']).toBe('Bearer tok.en.value');
+    await mock.close();
+  });
+
+  it('accepts a token that already starts with Bearer and ignores a blank one', async () => {
+    const { mock, seen } = recording(200);
+    await new ArchiveClient({ dispatcher: mock, authToken: ' Bearer abc ' }).index();
+    await new ArchiveClient({ dispatcher: mock, authToken: '   ' }).index();
+    expect(seen[0]?.['authorization']).toBe('Bearer abc');
+    expect(seen[1]?.['authorization']).toBeUndefined();
+    await mock.close();
+  });
+
+  it('lets an explicit authorization header win', async () => {
+    const { mock, seen } = recording(200);
+    await new ArchiveClient({
+      dispatcher: mock,
+      authToken: 'from-option',
+      headers: { authorization: 'Bearer from-headers' },
+    }).index();
+    expect(seen[0]?.['authorization']).toBe('Bearer from-headers');
+    await mock.close();
+  });
+
+  it('throws ArchiveAuthError on 401, telling a rejected token from a missing one', async () => {
+    const { mock } = recording(401);
+    const rejected = await new ArchiveClient({ dispatcher: mock, authToken: 'old' }).index().catch((e: unknown) => e);
+    expect(rejected).toBeInstanceOf(ArchiveAuthError);
+    expect(rejected).toBeInstanceOf(ArchiveHttpError);
+    expect(rejected).toMatchObject({ statusCode: 401, hadToken: true, name: 'ArchiveAuthError' });
+    expect((rejected as Error).message).toMatch(/rejected the authToken/);
+
+    const missing = await new ArchiveClient({ dispatcher: mock }).index().catch((e: unknown) => e);
+    expect(missing).toMatchObject({ hadToken: false });
+    expect((missing as Error).message).toMatch(/needs an authToken/);
+
+    const viaHeader = await new ArchiveClient({ dispatcher: mock, headers: { Authorization: 'Bearer x' } })
+      .index()
+      .catch((e: unknown) => e);
+    expect(viaHeader).toMatchObject({ hadToken: true });
+    await mock.close();
+  });
+
+  it('still reports 403 and 404 as missing files', async () => {
+    const { mock } = recording(403);
+    await expect(new ArchiveClient({ dispatcher: mock, authToken: 't' }).index()).rejects.toBeInstanceOf(
+      ArchiveNotFoundError,
+    );
+    await mock.close();
   });
 });
 

@@ -1,6 +1,6 @@
 {
   "name": "@exhumer/f1-live-timing",
-  "version": "2.1.0",
+  "version": "2.2.0",
   "description": "F1 live timing client for Node.js: live SignalR Core feed, archive replay and a UTC timeline for syncing with video",
   "type": "module",
   "author": {
@@ -61,19 +61,20 @@
     "livetiming",
     "signalr",
     "telemetry",
-    "typescript"
+    "typescript",
+    "live-timing"
   ],
   "license": "MIT",
   "devDependencies": {
     "@types/node": "^26.6.5",
-    "@vitest/coverage-istanbul": "^5.0.4",
+    "@vitest/coverage-istanbul": "^5.0.5",
     "tsdown": "^0.23.1",
     "typescript": "^7.0.2",
-    "vitest": "^5.0.4"
+    "vitest": "^5.0.5"
   },
   "dependencies": {
     "@exhumer/signalr-client": "^3.0.0",
-    "undici": "^8.12.1"
+    "undici": "^8.12.2"
   },
   "allowScripts": {
     "fsevents@2.3.3": true
