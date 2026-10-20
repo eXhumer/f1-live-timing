@@ -15,6 +15,8 @@ local recordings, all as one timeline you can scrub in step with a video.
 - `CarData` and `Position` arrive inflated. You never handle the `.z`
   base64/deflate payloads unless you ask for them.
 
+**This package is unofficial and is not associated in any way with the Formula 1 companies. F1, FORMULA ONE, FORMULA 1, FIA FORMULA ONE WORLD CHAMPIONSHIP, GRAND PRIX and related marks are trade marks of Formula One Licensing BV.**
+
 ## Requirements
 
 - Node.js ≥ 22.19.0
