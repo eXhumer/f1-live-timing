@@ -36,6 +36,15 @@ export function liveFeed(): LiveFeedFixture {
 }
 
 /**
+ * The hub moving from the 2026 US GP Practice 1 to Practice 2 on one
+ * connection: the Practice 1 snapshot from after it ended, then the first
+ * updates of Practice 2 (CarData and Position left out).
+ */
+export function liveSessionSwitch(): LiveFeedFixture {
+  return JSON.parse(fixture('live-session-switch.json')) as LiveFeedFixture;
+}
+
+/**
  * A MockAgent serving the fixture archive at livetiming.formula1.com/static.
  * Files that are not in the fixtures return 403 like S3 does.
  */

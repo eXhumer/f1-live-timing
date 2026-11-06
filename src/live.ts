@@ -1,4 +1,4 @@
-import { HubConnectionBuilder, type ILogger, LogLevel, NullLogger } from '@exhumer/signalr-client';
+import { HubConnectionBuilder, type ILogger, type IRetryPolicy, LogLevel, NullLogger } from '@exhumer/signalr-client';
 import type { Dispatcher } from 'undici';
 
 import { decodeTopicData, type LiveTimingMessage } from './decode.js';
@@ -38,12 +38,46 @@ export interface LiveClientOptions {
   readonly logger?: LogLevel | ILogger;
   /** Keep the original base64 string of compressed topics in `raw` (for recording). */
   readonly raw?: boolean;
+  /**
+   * Milliseconds without anything from the hub before the connection counts
+   * as lost and is reconnected. Default 60 000: F1's hub sometimes goes quiet
+   * for longer than SignalR's usual 30 s.
+   */
+  readonly serverTimeout?: number;
+  /**
+   * When to retry a lost connection. Default: after 0, 1, 2, 5 and 10 s, then
+   * every 30 s, never giving up. A policy that returns `null` gives up, and the
+   * status becomes `'closed'`.
+   */
+  readonly reconnectPolicy?: IRetryPolicy;
   /** Replace the SignalR connection, for tests or a custom transport. */
   readonly connectionFactory?: (url: string) => HubConnectionLike;
 }
 
+/** The session the hub is serving, from `SessionInfo`. */
+export interface LiveSession {
+  /** `SessionInfo.Key`, unique per session. */
+  readonly key: number;
+  readonly name?: string;
+  /** Archive path, such as `2026/2026-10-25_United_States_Grand_Prix/2026-10-23_Practice_2/`. */
+  readonly path?: string;
+  /** UTC time of the message that announced the session. */
+  readonly utc: number;
+}
+
 type MessageListener = (message: LiveTimingMessage) => void;
 type StatusListener = (status: LiveStatus, error?: Error) => void;
+type SessionListener = (session: LiveSession) => void;
+
+/** Default {@link LiveClientOptions.serverTimeout}. */
+const DEFAULT_SERVER_TIMEOUT = 60_000;
+const RETRY_DELAYS = [0, 1_000, 2_000, 5_000, 10_000];
+/** Default {@link LiveClientOptions.reconnectPolicy}: never gives up. */
+const RETRY_FOREVER: IRetryPolicy = {
+  nextRetryDelayInMilliseconds: ({ previousRetryCount }) => RETRY_DELAYS[previousRetryCount] ?? 30_000,
+};
+/** Delay before subscribing again after a resubscribe failed. */
+const RESUBSCRIBE_DELAY = 5_000;
 
 /**
  * Live F1 timing over SignalR Core.
@@ -53,6 +87,15 @@ type StatusListener = (status: LiveStatus, error?: Error) => void;
  * each `feed` update as a message. Listeners added after `connect` resolves
  * miss that first snapshot; read it from {@link LiveClient.snapshot}. After a
  * reconnect the client subscribes again and delivers a fresh snapshot.
+ *
+ * The hub moves on to the next session over the same connection. When
+ * `SessionInfo.Key` changes, {@link LiveClient.subscribeSession} listeners are
+ * called before the message that announced it.
+ *
+ * Messages are stamped with the hub's timestamp, which is the time of the
+ * latest data change rather than of sending, and can be stale. A message
+ * received after a snapshot or a session change is never stamped earlier than
+ * it, so it can't land behind it on a timeline.
  */
 export class LiveClient {
   /** Topics actually subscribed to. */
@@ -64,11 +107,18 @@ export class LiveClient {
   readonly #raw: boolean;
   readonly #messageListeners = new Set<MessageListener>();
   readonly #statusListeners = new Set<StatusListener>();
+  readonly #sessionListeners = new Set<SessionListener>();
   readonly #queues = new Set<MessageQueue>();
   #snapshot: readonly LiveTimingMessage[] = [];
   #subscribed = false;
   #status: LiveStatus = 'connecting';
   #closing = false;
+  #session: LiveSession | undefined;
+  /** Newest time stamped on a delivered message. */
+  #latest = -Infinity;
+  /** No message is stamped earlier than this: the last snapshot or session change. */
+  #floor = -Infinity;
+  #resubscribeTimer: ReturnType<typeof setTimeout> | undefined;
 
   private constructor(connection: HubConnectionLike, topics: readonly Topic[], skipped: readonly Topic[], raw: boolean) {
     this.#connection = connection;
@@ -89,7 +139,13 @@ export class LiveClient {
     const connection = (options.connectionFactory ?? createConnection(options))(url.toString());
 
     const client = new LiveClient(connection, topics, skipped, options.raw ?? false);
-    await client.#start();
+    try {
+      await client.#start();
+    } catch (error) {
+      // A failed Subscribe leaves the connection open, reconnecting forever.
+      await connection.stop().catch(() => {});
+      throw error;
+    }
     return client;
   }
 
@@ -110,6 +166,11 @@ export class LiveClient {
     return this.#status;
   }
 
+  /** The session the hub is serving, once a `SessionInfo` with a `Key` arrived. */
+  get session(): LiveSession | undefined {
+    return this.#session;
+  }
+
   /** Call `listener` with every message. Returns an unsubscribe function. */
   subscribeMessages(listener: MessageListener): () => void {
     this.#messageListeners.add(listener);
@@ -120,6 +181,16 @@ export class LiveClient {
   subscribeStatus(listener: StatusListener): () => void {
     this.#statusListeners.add(listener);
     return () => this.#statusListeners.delete(listener);
+  }
+
+  /**
+   * Call `listener` when the hub moves on to another session, before the
+   * message that announced it is delivered. Not called for the session found
+   * while connecting (see {@link session}). Returns an unsubscribe function.
+   */
+  subscribeSession(listener: SessionListener): () => void {
+    this.#sessionListeners.add(listener);
+    return () => this.#sessionListeners.delete(listener);
   }
 
   /**
@@ -137,6 +208,7 @@ export class LiveClient {
   async close(): Promise<void> {
     if (this.#status === 'closed') return;
     this.#closing = true;
+    clearTimeout(this.#resubscribeTimer);
     try {
       await this.#connection.invoke('Unsubscribe', this.topics.map(toWireTopic));
     } catch {
@@ -150,18 +222,30 @@ export class LiveClient {
     this.#connection.on('feed', (topic: string, data: unknown, timestamp?: string) => {
       this.#onFeed(topic, data, timestamp);
     });
-    this.#connection.onreconnecting((error) => this.#setStatus('reconnecting', error));
-    this.#connection.onreconnected(() => {
-      this.#subscribe()
-        .then(() => this.#setStatus('connected'))
-        .catch((error: unknown) => this.#setStatus('reconnecting', toError(error)));
+    this.#connection.onreconnecting((error) => {
+      clearTimeout(this.#resubscribeTimer);
+      this.#setStatus('reconnecting', error);
     });
+    this.#connection.onreconnected(() => this.#resubscribe());
     this.#connection.onclose((error) => {
+      clearTimeout(this.#resubscribeTimer);
       if (!this.#closing) this.#setStatus('closed', error);
     });
     await this.#connection.start();
     await this.#subscribe();
     this.#setStatus('connected');
+  }
+
+  /** Subscribe again after a reconnect, retrying until it works or the connection drops. */
+  #resubscribe(): void {
+    clearTimeout(this.#resubscribeTimer);
+    this.#subscribe()
+      .then(() => this.#setStatus('connected'))
+      .catch((error: unknown) => {
+        if (this.#closing) return;
+        this.#setStatus('reconnecting', toError(error));
+        this.#resubscribeTimer = setTimeout(() => this.#resubscribe(), RESUBSCRIBE_DELAY);
+      });
   }
 
   async #subscribe(): Promise<void> {
@@ -172,12 +256,19 @@ export class LiveClient {
     const messages: LiveTimingMessage[] = [];
     if (isPlainObject(snapshot)) {
       const decoded = Object.entries(snapshot).map(([wire, value]) => [wire, value, decodeTopicData(wire, value)] as const);
-      const utc = snapshotTime(new Map(decoded.map(([wire, , data]) => [fromWireTopic(wire), data])));
+      // A reconnect snapshot is newer than everything delivered before it.
+      const utc = Math.max(
+        snapshotTime(new Map(decoded.map(([wire, , data]) => [fromWireTopic(wire), data]))),
+        this.#latest,
+      );
       for (const [wire, value, data] of decoded) {
         if (!isPlainObject(data)) continue;
         messages.push(this.#message(wire, { ...data, _kf: true }, utc, value));
       }
+      if (messages.length > 0) this.#floor = Math.max(this.#floor, utc);
     }
+    const info = messages.find((message) => message.topic === 'SessionInfo');
+    if (info) this.#updateSession(info);
     if (!this.#subscribed) {
       this.#subscribed = true;
       this.#snapshot = messages;
@@ -186,8 +277,25 @@ export class LiveClient {
   }
 
   #onFeed(wire: string, data: unknown, timestamp: string | undefined): void {
-    const utc = typeof timestamp === 'string' ? parseUtc(timestamp) : Date.now();
-    this.#emit(this.#message(wire, decodeTopicData(wire, data), utc, data));
+    const utc = Math.max(typeof timestamp === 'string' ? parseUtc(timestamp) : Date.now(), this.#floor);
+    const message = this.#message(wire, decodeTopicData(wire, data), utc, data);
+    if (message.topic === 'SessionInfo') this.#updateSession(message);
+    this.#emit(message);
+  }
+
+  /** Track `SessionInfo.Key`, telling listeners when it changes after the first one. */
+  #updateSession(message: LiveTimingMessage): void {
+    const data = message.data;
+    if (!isPlainObject(data) || typeof data['Key'] !== 'number' || data['Key'] === this.#session?.key) return;
+    const known = this.#session !== undefined;
+    this.#session = {
+      key: data['Key'],
+      ...(typeof data['Name'] === 'string' && { name: data['Name'] }),
+      ...(typeof data['Path'] === 'string' && { path: data['Path'] }),
+      utc: message.utc,
+    };
+    this.#floor = Math.max(this.#floor, message.utc);
+    if (known) for (const listener of [...this.#sessionListeners]) listener(this.#session);
   }
 
   #message(wire: string, data: unknown, utc: number, original: unknown): LiveTimingMessage {
@@ -196,6 +304,7 @@ export class LiveClient {
   }
 
   #emit(message: LiveTimingMessage): void {
+    this.#latest = Math.max(this.#latest, message.utc);
     for (const queue of this.#queues) queue.push(message);
     for (const listener of [...this.#messageListeners]) listener(message);
   }
@@ -213,8 +322,8 @@ export class LiveClient {
 function createConnection(options: LiveClientOptions): (url: string) => HubConnectionLike {
   return (url) => {
     const builder = new HubConnectionBuilder()
-      .withUrl(url)
-      .withAutomaticReconnect()
+      .withUrl(url, { serverTimeoutInMilliseconds: options.serverTimeout ?? DEFAULT_SERVER_TIMEOUT })
+      .withAutomaticReconnect(options.reconnectPolicy ?? RETRY_FOREVER)
       .configureLogging(options.logger ?? new NullLogger());
     return (options.dispatcher ? builder.withDispatcher(options.dispatcher) : builder.withCookies()).build();
   };
@@ -224,11 +333,12 @@ function createConnection(options: LiveClientOptions): (url: string) => HubConne
 const HEARTBEAT_LEAD = 2_000;
 
 /**
- * The time to stamp a subscription snapshot with. It must not be later than
- * the feed updates that follow it, or the snapshot would overwrite them on the
- * timeline. The newest sample time inside the snapshot is a safe choice, since
- * CarData's last sample time equals its feed timestamp. `Heartbeat` runs about
- * 2 s ahead of feed timestamps, so it is only a fallback.
+ * The time to stamp a subscription snapshot with: the newest time inside it.
+ * CarData's and Position's last sample times equal their feed timestamps.
+ * `ExtrapolatedClock.Utc` is when the session clock last started or stopped,
+ * so it can be old, and `Heartbeat` runs about 2 s ahead of feed timestamps,
+ * so its time is used less that lead. {@link LiveClient} also never stamps a
+ * reconnect snapshot earlier than the messages it already delivered.
  */
 export function snapshotTime(topics: ReadonlyMap<Topic, unknown>, now = Date.now()): number {
   const times: number[] = [];
@@ -245,12 +355,11 @@ export function snapshotTime(topics: ReadonlyMap<Topic, unknown>, now = Date.now
   if (isPlainObject(position)) add(position['Timestamp']);
   const clock = topics.get('ExtrapolatedClock');
   if (isPlainObject(clock)) add(clock['Utc']);
-  if (times.length > 0) return Math.max(...times);
   const heartbeat = topics.get('Heartbeat');
   if (isPlainObject(heartbeat) && typeof heartbeat['Utc'] === 'string') {
-    return parseUtc(heartbeat['Utc']) - HEARTBEAT_LEAD;
+    times.push(parseUtc(heartbeat['Utc']) - HEARTBEAT_LEAD);
   }
-  return now;
+  return times.length > 0 ? Math.max(...times) : now;
 }
 
 function toError(error: unknown): Error {

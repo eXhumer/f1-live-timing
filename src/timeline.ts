@@ -6,6 +6,8 @@ import type { Topic, TopicState } from './topics.js';
 /** Anything that pushes messages to a listener, such as a `LiveClient`. */
 export interface MessageSource {
   subscribeMessages(listener: (message: LiveTimingMessage) => void): () => void;
+  /** Called when the source moves on to another session, before its first message. */
+  subscribeSession?(listener: () => void): () => void;
 }
 
 export interface TimelineOptions {
@@ -22,7 +24,16 @@ interface Checkpoint {
   readonly state: SessionState;
 }
 
+export interface LiveTimelineOptions extends TimelineOptions {
+  /**
+   * {@link Timeline.clear} the timeline when the source moves on to another
+   * session, so it only ever holds one session. Default `true`.
+   */
+  readonly clearOnSessionChange?: boolean;
+}
+
 const DEFAULT_CHECKPOINT_INTERVAL = 30_000;
+const EMPTY_CHECKPOINT: Checkpoint = { index: 0, utc: -Infinity, state: EMPTY_STATE };
 
 /**
  * Every message of a session, ordered by UTC time, with state checkpoints so a
@@ -36,10 +47,12 @@ export class Timeline {
   readonly telemetry = new TelemetryStore();
 
   readonly #messages: LiveTimingMessage[] = [];
-  readonly #checkpoints: Checkpoint[] = [{ index: 0, utc: -Infinity, state: EMPTY_STATE }];
+  readonly #checkpoints: Checkpoint[] = [EMPTY_CHECKPOINT];
   readonly #interval: number;
   readonly #cursors = new Set<Cursor>();
   readonly #listeners = new Set<(timeline: Timeline) => void>();
+  /** Latest time of each topic's messages. */
+  readonly #topicLast = new Map<Topic, number>();
   #head: { index: number; state: SessionState } = { index: 0, state: EMPTY_STATE };
   #start: number | undefined;
 
@@ -48,11 +61,22 @@ export class Timeline {
     this.#interval = options.checkpointInterval ?? DEFAULT_CHECKPOINT_INTERVAL;
   }
 
-  /** Build a timeline that keeps appending messages from a live source. */
-  static fromLive(source: MessageSource, options: TimelineOptions = {}): Timeline & Disposable {
+  /**
+   * Build a timeline that keeps appending messages from a live source. When
+   * the source moves on to another session the timeline is cleared first (see
+   * {@link LiveTimelineOptions.clearOnSessionChange}).
+   */
+  static fromLive(source: MessageSource, options: LiveTimelineOptions = {}): Timeline & Disposable {
     const timeline = new Timeline(options);
     const unsubscribe = source.subscribeMessages((message) => timeline.insert([message]));
-    return Object.assign(timeline, { [Symbol.dispose]: unsubscribe });
+    const unsubscribeSession =
+      options.clearOnSessionChange === false ? undefined : source.subscribeSession?.(() => timeline.clear());
+    return Object.assign(timeline, {
+      [Symbol.dispose]: () => {
+        unsubscribe();
+        unsubscribeSession?.();
+      },
+    });
   }
 
   /** UTC instant the session stream started, or the first message's time. */
@@ -118,11 +142,47 @@ export class Timeline {
   insert(batch: readonly LiveTimingMessage[]): void {
     if (batch.length === 0) return;
     const sorted = isSorted(batch) ? batch : [...batch].sort((a, b) => a.utc - b.utc);
+    // A late message only needs a rebuild if it lands before a message of its
+    // own topic: topics merge independently, so it can be applied in place.
+    const late = batch.length === 1 && batch[0]!.utc >= (this.#topicLast.get(batch[0]!.topic) ?? -Infinity);
     const firstIndex = this.#merge(sorted);
-    for (const message of sorted) this.telemetry.add(message);
-    this.#invalidate(firstIndex);
-    this.#advanceHead();
-    for (const cursor of this.#cursors) cursor._inserted(firstIndex);
+    for (const message of sorted) {
+      this.telemetry.add(message);
+      this.#topicLast.set(message.topic, Math.max(this.#topicLast.get(message.topic) ?? -Infinity, message.utc));
+    }
+    if (late && firstIndex < this.#messages.length - 1) {
+      this.#insertInPlace(firstIndex, batch[0]!);
+      for (const cursor of this.#cursors) cursor._insertedInPlace(firstIndex, batch[0]!);
+    } else {
+      this.#invalidate(firstIndex);
+      this.#advanceHead();
+      for (const cursor of this.#cursors) cursor._inserted(firstIndex);
+    }
+    const errors: unknown[] = [];
+    for (const cursor of [...this.#cursors]) {
+      try {
+        cursor._follow();
+      } catch (error) {
+        errors.push(error);
+      }
+    }
+    for (const listener of [...this.#listeners]) listener(this);
+    throwAll(errors, 'Following cursor subscribers threw.');
+  }
+
+  /**
+   * Drop every message, checkpoint and telemetry sample, and the start time,
+   * to begin a new session. Cursors rebuild (with `reset: true`) on their next
+   * move; following cursors do so right away.
+   */
+  clear(): void {
+    this.#messages.length = 0;
+    this.#checkpoints.length = 1;
+    this.#head = { index: 0, state: EMPTY_STATE };
+    this.#start = undefined;
+    this.#topicLast.clear();
+    this.telemetry.clear();
+    for (const cursor of this.#cursors) cursor._inserted(0);
     const errors: unknown[] = [];
     for (const cursor of [...this.#cursors]) {
       try {
@@ -172,6 +232,20 @@ export class Timeline {
     while (i < tail.length) messages.push(tail[i++]!);
     while (j < batch.length) messages.push(batch[j++]!);
     return firstIndex;
+  }
+
+  /**
+   * Account for `message`, inserted at `index` behind the head without coming
+   * before any message of its topic: apply it to the head and to the
+   * checkpoints after it, whose indices shift by one.
+   */
+  #insertInPlace(index: number, message: LiveTimingMessage): void {
+    const checkpoints = this.#checkpoints;
+    for (let i = checkpoints.length - 1; i > 0 && checkpoints[i]!.index > index; i -= 1) {
+      const checkpoint = checkpoints[i]!;
+      checkpoints[i] = { index: checkpoint.index + 1, utc: checkpoint.utc, state: applyMessage(checkpoint.state, message) };
+    }
+    this.#head = { index: this.#head.index + 1, state: applyMessage(this.#head.state, message) };
   }
 
   /** Drop checkpoints that include messages at or after `index`. */
@@ -250,6 +324,8 @@ export class Cursor implements Disposable {
   #time = -Infinity;
   #state: SessionState = EMPTY_STATE;
   #stale = false;
+  /** Messages inserted behind the cursor that its next move applies in place. */
+  #late: LiveTimingMessage[] = [];
   #following = false;
   #disposed = false;
 
@@ -315,13 +391,14 @@ export class Cursor implements Disposable {
     const end = this.#timeline._end(utc);
     const updates = new Map<Topic, LiveTimingMessage[]>();
     let state = this.#state;
-    for (let index = this.#index; index < end; index += 1) {
-      const message = this.#timeline._at(index);
+    const apply = (message: LiveTimingMessage) => {
       state = applyMessage(state, message);
       let list = updates.get(message.topic);
       if (!list) updates.set(message.topic, (list = []));
       list.push(message);
-    }
+    };
+    for (const message of this.#late.splice(0)) apply(message);
+    for (let index = this.#index; index < end; index += 1) apply(this.#timeline._at(index));
     this.#index = end;
     this.#time = utc;
     this.#state = state;
@@ -339,6 +416,7 @@ export class Cursor implements Disposable {
     this.#time = utc;
     this.#state = state;
     this.#stale = false;
+    this.#late = [];
     this.#notify(null, true);
   }
 
@@ -369,14 +447,21 @@ export class Cursor implements Disposable {
     this.dispose();
   }
 
-  /** @internal Called by the timeline after every insert. */
+  /** @internal Called by the timeline after every insert or clear. */
   _follow(): void {
-    if (this.#following) this.#advance(this.#timeline.last!);
+    if (this.#following) this.#advance(this.#timeline.last ?? -Infinity);
   }
 
   /** @internal Called by the timeline after an insert at `index`. */
   _inserted(index: number): void {
     if (index < this.#index) this.#stale = true;
+  }
+
+  /** @internal Called by the timeline after `message` was inserted at `index` without reordering its topic. */
+  _insertedInPlace(index: number, message: LiveTimingMessage): void {
+    if (index >= this.#index) return;
+    this.#index += 1;
+    if (!this.#stale) this.#late.push(message);
   }
 
   #assertOpen(): void {

@@ -7,3 +7,6 @@
 # Coverage reports
 coverage/
 test-report.junit.xml
+
+# Live captures
+captures/

@@ -24,6 +24,13 @@ export interface PositionSample {
   readonly z: number;
 }
 
+/**
+ * Samples further apart than this are not interpolated between (a connection
+ * drop, say): lookups in the gap hold the earlier sample. Samples normally
+ * arrive every 200-300 ms.
+ */
+const MAX_INTERPOLATION_GAP = 5_000;
+
 /** Sorted per-driver sample lists, kept up to date as messages arrive. */
 class Series<S extends { readonly utc: number }> {
   readonly #byDriver = new Map<RacingNumber, S[]>();
@@ -108,13 +115,14 @@ export class TelemetryStore {
   /**
    * Car telemetry at a UTC time. Continuous channels are interpolated between
    * the samples around `utc`; gear and DRS hold the earlier sample's value.
-   * After the last sample the last sample is returned, and before the first
-   * sample the result is `undefined`.
+   * After the last sample, or in a gap of more than 5 s between samples, the
+   * earlier sample is returned. Before the first sample the result is
+   * `undefined`.
    */
   carAt(driver: RacingNumber, utc: number): CarSample | undefined {
     const [a, b] = this.#car.around(driver, utc);
     if (!a) return undefined;
-    if (!b) return a;
+    if (!b || b.utc - a.utc > MAX_INTERPOLATION_GAP) return a;
     const t = (utc - a.utc) / (b.utc - a.utc);
     const sample: CarSample = {
       utc,
@@ -131,7 +139,7 @@ export class TelemetryStore {
   positionAt(driver: RacingNumber, utc: number): PositionSample | undefined {
     const [a, b] = this.#position.around(driver, utc);
     if (!a) return undefined;
-    if (!b) return a;
+    if (!b || b.utc - a.utc > MAX_INTERPOLATION_GAP) return a;
     const t = (utc - a.utc) / (b.utc - a.utc);
     return {
       utc,

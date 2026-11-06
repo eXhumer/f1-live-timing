@@ -72,6 +72,14 @@ describe('Recorder', () => {
     await expect(readFile(join(dir, RECORDING_FILE))).rejects.toThrow('ENOENT');
   });
 
+  it('creates a recorder without waiting', async () => {
+    const recorder = Recorder.createSync(join(dir, 'next', 'session'), { start: 0 });
+    recorder.write({ topic: 'LapCount', utc: 1_000, data: { CurrentLap: 1 } });
+    await recorder.close();
+    expect(await readFile(join(dir, 'next', 'session', 'LapCount.jsonStream'), 'utf8')).toBe('\uFEFF00:00:01.000{"CurrentLap":1}\r\n');
+    expect(Recorder.createSync(join(dir, 'other')).start).toBeUndefined();
+  });
+
   it('reports stream errors on close', async () => {
     const recorder = await Recorder.create(join(dir, 'gone'));
     await rm(join(dir, 'gone'), { recursive: true });

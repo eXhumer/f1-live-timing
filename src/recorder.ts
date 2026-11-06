@@ -1,4 +1,4 @@
-import { createWriteStream, type WriteStream } from 'node:fs';
+import { createWriteStream, mkdirSync, type WriteStream } from 'node:fs';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { finished } from 'node:stream/promises';
@@ -47,6 +47,16 @@ export class Recorder {
   /** Create the folder (if needed) and a recorder writing into it. */
   static async create(dir: string, options: RecorderOptions = {}): Promise<Recorder> {
     await mkdir(dir, { recursive: true });
+    return new Recorder(dir, options.start);
+  }
+
+  /**
+   * {@link create} without waiting, for switching recorders in a
+   * `LiveClient.subscribeSession` listener before the new session's first
+   * message arrives.
+   */
+  static createSync(dir: string, options: RecorderOptions = {}): Recorder {
+    mkdirSync(dir, { recursive: true });
     return new Recorder(dir, options.start);
   }
 

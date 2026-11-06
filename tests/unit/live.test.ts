@@ -5,7 +5,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { type HubConnectionLike, LIVE_URL, LiveClient, LogLevel, snapshotTime } from '../../src/live.js';
 import { Timeline } from '../../src/timeline.js';
 import { LIVE_TOPICS } from '../../src/topics.js';
-import { liveFeed } from '../helpers/fixtures.js';
+import { liveFeed, liveSessionSwitch } from '../helpers/fixtures.js';
 
 class FakeHub implements HubConnectionLike {
   readonly invocations: [string, unknown[]][] = [];
@@ -149,6 +149,14 @@ describe('LiveClient', () => {
     expect(statuses[0]?.[1]?.message).toBe('nope');
   });
 
+  it('stops the connection when the first Subscribe fails', async () => {
+    const hub = new FakeHub();
+    hub.failSubscribe = true;
+    hub.stop.mockImplementationOnce(() => Promise.reject(new Error('already gone')));
+    await expect(LiveClient.connect({ connectionFactory: () => hub })).rejects.toBe('nope');
+    expect(hub.stop).toHaveBeenCalledTimes(1);
+  });
+
   it('ignores an empty snapshot and non-object topics', async () => {
     const hub = new FakeHub();
     hub.snapshot = null;
@@ -162,7 +170,9 @@ describe('LiveClient', () => {
   });
 
   it('stamps feed updates without a timestamp with the current time', async () => {
-    const { client, hub } = await connect();
+    const hub = new FakeHub();
+    hub.snapshot = null;
+    const client = await LiveClient.connect({ connectionFactory: () => hub });
     const seen = vi.fn();
     client.subscribeMessages(seen);
     vi.spyOn(Date, 'now').mockReturnValue(1234);
@@ -244,6 +254,141 @@ describe('LiveClient', () => {
     }
   });
 
+  it('never stamps a reconnect snapshot earlier than what it already delivered', async () => {
+    const { client, hub } = await connect({ authToken: 't' });
+    const first = client.snapshot[0]!.utc;
+    const messages: { topic: string; utc: number }[] = [];
+    client.subscribeMessages((m) => messages.push(m));
+    const later = new Date(first + 3_600_000).toISOString();
+    hub.feed('LapCount', { CurrentLap: 9 }, later);
+    hub.reconnected?.('id');
+    await vi.waitFor(() => expect(messages.length).toBeGreaterThan(1));
+    expect(messages.slice(1).every((m) => m.utc === Date.parse(later))).toBe(true);
+  });
+
+  it('never stamps a feed update earlier than the snapshot before it', async () => {
+    const { client, hub } = await connect({ authToken: 't' });
+    const seen: number[] = [];
+    client.subscribeMessages((m) => seen.push(m.utc));
+    hub.feed('TrackStatus', { Status: '1' }, '2000-01-01T00:00:00Z');
+    expect(seen).toEqual([client.snapshot[0]!.utc]);
+  });
+
+  it('tracks the session and reports when the hub moves on to the next one', async () => {
+    const { snapshot, feeds } = liveSessionSwitch();
+    const hub = new FakeHub();
+    hub.snapshot = snapshot;
+    const client = await LiveClient.connect({ connectionFactory: () => hub });
+    expect(client.session).toEqual({
+      key: 11389,
+      name: 'Practice 1',
+      path: '2026/2026-10-25_United_States_Grand_Prix/2026-10-23_Practice_1/',
+      utc: client.snapshot[0]!.utc,
+    });
+
+    const events: string[] = [];
+    const messages: { topic: string; utc: number }[] = [];
+    client.subscribeSession((session) => events.push(`session ${session.key}`));
+    client.subscribeMessages((m) => {
+      events.push(m.topic);
+      messages.push(m);
+    });
+    for (const [topic, data, ts] of feeds) hub.feed(topic, data, ts);
+
+    expect(events.slice(0, 2)).toEqual(['session 11390', 'SessionInfo']);
+    expect(events.filter((e) => e.startsWith('session'))).toHaveLength(1);
+    expect(client.session?.name).toBe('Practice 2');
+    // F1 sends the new TrackStatus stamped 22 minutes before the switch.
+    expect(feeds[1]![2]).toBe('2026-10-23T20:23:27.876Z');
+    expect(messages[1]).toMatchObject({ topic: 'TrackStatus', utc: client.session!.utc });
+    expect(messages.every((m) => m.utc >= client.session!.utc)).toBe(true);
+  });
+
+  it('reports a session change found in a reconnect snapshot, and ignores SessionInfo without a Key', async () => {
+    const { snapshot } = liveSessionSwitch();
+    const hub = new FakeHub();
+    hub.snapshot = { SessionInfo: { Name: 'No key' } };
+    const client = await LiveClient.connect({ connectionFactory: () => hub });
+    expect(client.session).toBeUndefined();
+    hub.feed('SessionInfo', { Key: 1 }, '2099-10-23T20:00:00Z');
+    expect(client.session).toEqual({ key: 1, utc: Date.parse('2099-10-23T20:00:00Z') });
+
+    const sessions = vi.fn();
+    const off = client.subscribeSession(sessions);
+    hub.feed('SessionInfo', { SessionStatus: 'Started' }, '2026-10-23T20:01:00Z');
+    hub.feed('SessionInfo', { Key: 1, SessionStatus: 'Finished' }, '2026-10-23T20:02:00Z');
+    expect(sessions).not.toHaveBeenCalled();
+    hub.snapshot = snapshot;
+    hub.reconnected?.('id');
+    await vi.waitFor(() => expect(sessions).toHaveBeenCalledTimes(1));
+    expect(sessions.mock.calls[0]![0]).toMatchObject({ key: 11389, name: 'Practice 1' });
+    off();
+  });
+
+  it('subscribes again after a failed resubscribe', async () => {
+    vi.useFakeTimers();
+    try {
+      const { client, hub } = await connect();
+      const statuses: string[] = [];
+      client.subscribeStatus((s) => statuses.push(s));
+      hub.failSubscribe = true;
+      hub.reconnected?.(null);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(statuses).toEqual(['reconnecting']);
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(statuses).toEqual(['reconnecting', 'reconnecting']);
+      hub.failSubscribe = false;
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(statuses).toEqual(['reconnecting', 'reconnecting', 'connected']);
+
+      // A pending retry stops when the connection drops again or closes.
+      hub.failSubscribe = true;
+      hub.reconnected?.(null);
+      await vi.advanceTimersByTimeAsync(0);
+      hub.reconnecting?.(new Error('drop'));
+      hub.close?.();
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(hub.invocations.filter(([method]) => method === 'Subscribe')).toHaveLength(5);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not retry a resubscribe that fails while closing', async () => {
+    const { client, hub } = await connect();
+    const statuses: string[] = [];
+    client.subscribeStatus((s) => statuses.push(s));
+    hub.failSubscribe = true;
+    hub.reconnected?.(null);
+    await client.close();
+    await new Promise((r) => setTimeout(r, 0));
+    expect(statuses).toEqual(['closed']);
+  });
+
+  it('configures the server timeout and a reconnect policy that never gives up', async () => {
+    const hub = new FakeHub();
+    const withUrl = vi.spyOn(HubConnectionBuilder.prototype, 'withUrl');
+    const reconnect = vi.spyOn(HubConnectionBuilder.prototype, 'withAutomaticReconnect');
+    const build = vi.spyOn(HubConnectionBuilder.prototype, 'build').mockReturnValue(hub as never);
+    try {
+      await LiveClient.connect();
+      expect(withUrl.mock.calls[0]![1]).toEqual({ serverTimeoutInMilliseconds: 60_000 });
+      const policy = reconnect.mock.calls[0]![0] as { nextRetryDelayInMilliseconds(c: { previousRetryCount: number }): number | null };
+      expect([0, 1, 2, 3, 4, 5, 50].map((n) => policy.nextRetryDelayInMilliseconds({ previousRetryCount: n }))).toEqual([
+        0, 1_000, 2_000, 5_000, 10_000, 30_000, 30_000,
+      ]);
+
+      const custom = { nextRetryDelayInMilliseconds: () => null };
+      await LiveClient.connect({ serverTimeout: 5, reconnectPolicy: custom });
+      expect(withUrl.mock.calls[1]![1]).toEqual({ serverTimeoutInMilliseconds: 5 });
+      expect(reconnect.mock.calls[1]![0]).toBe(custom);
+    } finally {
+      withUrl.mockRestore();
+      reconnect.mockRestore();
+      build.mockRestore();
+    }
+  });
+
   it('wraps an Error from a failed resubscribe as is', async () => {
     const { client, hub } = await connect();
     const statuses: (Error | undefined)[] = [];
@@ -266,6 +411,17 @@ describe('snapshotTime', () => {
         ]),
       ),
     ).toBe(Date.parse('2026-01-01T00:00:02Z'));
+  });
+
+  it('prefers a current Heartbeat over a stopped clock', () => {
+    expect(
+      snapshotTime(
+        new Map<string, unknown>([
+          ['ExtrapolatedClock', { Utc: '2026-01-01T00:00:00Z' }],
+          ['Heartbeat', { Utc: '2026-01-01T01:00:00Z' }],
+        ]),
+      ),
+    ).toBe(Date.parse('2026-01-01T00:59:58Z'));
   });
 
   it('falls back to Heartbeat minus its lead, then now', () => {

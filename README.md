@@ -76,21 +76,35 @@ await live.close();
 `Position`, so the client leaves them out and lists them in
 `live.skippedTopics`.
 
+You can connect before a session starts. Until then the hub serves the
+previous session, and it moves on to the next one over the same connection.
+`Timeline.fromLive` clears itself at that point, so it only ever holds one
+session; `live.subscribeSession` tells you when it happens. A lost connection
+is retried until it comes back, and every reconnect delivers a fresh
+snapshot.
+
 ### Record a live session and play it back
 
 ```ts
 import { LiveClient, loadRecording, Recorder } from '@exhumer/f1-live-timing';
 
 const live = await LiveClient.connect({ authToken, raw: true });
-const recorder = await Recorder.create('./recordings/singapore-race');
+const folder = (session = live.session) => `./recordings/${session?.key ?? 'unknown'}`;
+
+let recorder = await Recorder.create(folder());
 for (const message of live.snapshot) recorder.write(message);
+// One folder per session: switch before the new session's first message.
+live.subscribeSession((session) => {
+  void recorder.close();
+  recorder = Recorder.createSync(folder(session));
+});
 live.subscribeMessages((message) => recorder.write(message));
 
 // When the session ends
 await live.close();
 await recorder.close();
 
-const timeline = await loadRecording('./recordings/singapore-race');
+const timeline = await loadRecording(folder());
 ```
 
 A recording uses the same layout as F1's archive (`Index.json`,
@@ -113,9 +127,16 @@ interface LiveTimingMessage {
 }
 ```
 
-Live messages are stamped with the hub's feed timestamp. Archive lines carry
-an offset from the start of the stream, which `ArchiveClient.streamStart`
-converts to an exact UTC instant from the first `CarData.z` line.
+Live messages are stamped with the hub's feed timestamp. That is the time of
+the latest data change rather than of sending, so it is not always current:
+after a session ends every message carries the same time, and some updates
+that announce a new session are stamped minutes in the past. `LiveClient`
+never stamps a message earlier than the last snapshot or session change before
+it. `CarData` and `Position` are stamped with their newest sample, about 2 s
+ahead of the other topics, so messages arrive slightly out of order; the
+timeline sorts them. Archive lines carry an offset from the start of the
+stream, which `ArchiveClient.streamStart` converts to an exact UTC instant from
+the first `CarData.z` line.
 
 ### Merging
 
@@ -137,7 +158,10 @@ merge yourself.
 A `Timeline` holds every message of a session in UTC order, with state
 checkpoints (every 30 s of session time by default) so any instant can be
 rebuilt quickly. Messages can be inserted in any order. A replay inserts them
-up front; a live timeline keeps appending.
+up front; a live timeline keeps appending. A message that arrives late is
+applied in place unless it comes before a message of its own topic, in which
+case cursors that passed it rebuild. `clear()` empties the timeline to start a
+new session.
 
 A `Cursor` is a position on the timeline:
 
@@ -164,7 +188,10 @@ timeline.telemetry.carRange('1', from, to); // raw samples for a chart
 ```
 
 `carAt` and `positionAt` interpolate between samples, while gear and DRS hold
-their previous value. The DRS channel is absent from 2026 onwards.
+their previous value. Across a gap of more than 5 s (a dropped connection, say)
+they hold the earlier sample instead. The DRS channel is absent from 2026
+onwards. Throttle and brake run from 0 to 100; F1 sends `104` on both when the
+car reports no reading, mostly while it sits in the garage.
 
 ## API
 
@@ -208,12 +235,16 @@ parallel and each is usable as soon as it lands.
 ### `LiveClient.connect(options?)`
 
 Options: `authToken`, `topics` (default `LIVE_TOPICS`), `url`, `dispatcher`,
-`logger`, `raw`, and `connectionFactory` (for tests or a custom transport).
+`logger`, `raw`, `serverTimeout` (default 60 000 ms without a message before
+the connection counts as lost), `reconnectPolicy` (default: retry after 0, 1,
+2, 5 and 10 s, then every 30 s, forever; return `null` to give up), and
+`connectionFactory` (for tests or a custom transport).
 
 Resolves after the subscription snapshot arrives. The snapshot is delivered as
 one keyframe per topic before `connect` resolves, so a listener added
 afterwards never sees it: read it from `live.snapshot`. A reconnect subscribes
-again and delivers a fresh snapshot to listeners.
+again and delivers a fresh snapshot to listeners, stamped no earlier than the
+messages before it. A failed resubscribe is retried every 5 s.
 
 | Member | Use |
 | --- | --- |
@@ -221,12 +252,23 @@ again and delivers a fresh snapshot to listeners.
 | `messages()` | The same as an async iterator, ending when the client closes. |
 | `subscribeStatus(cb)` | `'connecting' \| 'connected' \| 'reconnecting' \| 'closed'`. |
 | `snapshot` | The connect-time snapshot: one keyframe message per topic. |
+| `session` | `{ key, name?, path?, utc }` from `SessionInfo`, once known. |
+| `subscribeSession(cb)` | Called when the hub moves on to another session, before the message that announced it. |
 | `status`, `topics`, `skippedTopics` | Current state. |
 | `close()` | Unsubscribes and stops the connection. |
 
+### `Timeline.fromLive(source, options?)`
+
+A timeline that appends every message from a `LiveClient` (or any source with
+`subscribeMessages`). Options are the `Timeline` options (`start`,
+`checkpointInterval`) plus `clearOnSessionChange` (default `true`): clear the
+timeline when the source moves on to another session. Dispose it to stop
+listening.
+
 ### `Recorder` and `loadRecording`
 
-`Recorder.create(dir, { start? })` returns a recorder, `write(message)` appends
+`Recorder.create(dir, { start? })` returns a recorder (`Recorder.createSync`
+does the same without waiting), `write(message)` appends
 a message, and `close()` (or `await using`) writes the keyframes,
 `Index.json` and `Recording.json`. `loadRecording(dir, options?)` reads a
 recording or a downloaded archive session back into a `Timeline`.
@@ -251,7 +293,18 @@ npm run coverage
 
 The tests run against fixtures from the 2026 Singapore Grand Prix archive in
 `tests/fixtures`. `CarData.z` and `Position.z` are trimmed to their first 120
-lines to keep the repository small.
+lines to keep the repository small. `live-session-switch.json` is the live hub
+moving from the 2026 US GP Practice 1 to Practice 2 on one connection.
+
+`scripts/capture-live.ts` records everything the live hub sends during a
+session, for checking the library against real data:
+
+```sh
+F1_AUTH_TOKEN=<subscription token> npm run capture
+```
+
+Start it about an hour before the session; it stops 30 minutes after the
+session ends.
 
 ## License
 

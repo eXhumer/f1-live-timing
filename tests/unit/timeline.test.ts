@@ -1,7 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import type { LiveTimingMessage } from '../../src/decode.js';
+import { type HubConnectionLike, LiveClient } from '../../src/live.js';
 import { Timeline } from '../../src/timeline.js';
+import { liveSessionSwitch } from '../helpers/fixtures.js';
 
 const msg = (utc: number, topic: string, data: unknown): LiveTimingMessage => ({ topic, utc, data });
 const lap = (utc: number, n: number) => msg(utc, 'LapCount', { CurrentLap: n });
@@ -228,5 +230,162 @@ describe('Cursor', () => {
       throw new Error('b');
     });
     expect(() => timeline.insert([lap(2, 2)])).toThrow(AggregateError);
+  });
+
+  it('clears everything to start a new session', () => {
+    const timeline = new Timeline({ start: 1 });
+    const car = msg(10, 'CarData', { Entries: [{ Utc: '1970-01-01T00:00:00.010Z', Cars: { '1': { Channels: { 2: 100 } } } }] });
+    timeline.insert([lap(5, 1), car, lap(20, 2)]);
+    const following = timeline.cursor();
+    const parked = timeline.cursor();
+    const unmoved = timeline.cursor();
+    following.follow();
+    parked.seek(15);
+    const followingCalls: [unknown, boolean][] = [];
+    following.subscribe('LapCount', (state, { reset }) => followingCalls.push([state, reset]));
+    const parkedCalls: boolean[] = [];
+    parked.subscribe('LapCount', (_, { reset }) => parkedCalls.push(reset));
+    const listener = vi.fn();
+    timeline.subscribe(listener);
+
+    timeline.clear();
+    expect(timeline.size).toBe(0);
+    expect(timeline.start).toBeUndefined();
+    expect(timeline.latest()).toEqual({});
+    expect(timeline.telemetry.drivers()).toEqual([]);
+    expect(listener).toHaveBeenCalledTimes(1);
+    expect(followingCalls).toEqual([[undefined, true]]);
+    expect(following.state).toEqual({});
+    expect(parkedCalls).toEqual([]);
+
+    timeline.insert([lap(30, 1)]);
+    expect(following.get('LapCount')).toEqual({ CurrentLap: 1 });
+    parked.advanceTo(40);
+    expect(parkedCalls).toEqual([true]);
+    expect(parked.get('LapCount')).toEqual({ CurrentLap: 1 });
+    unmoved.advanceTo(40);
+    expect(unmoved.get('LapCount')).toEqual({ CurrentLap: 1 });
+    expect(timeline.stateAt(35)['LapCount']).toEqual({ CurrentLap: 1 });
+  });
+
+  it('rethrows following subscriber errors after clearing', () => {
+    const timeline = new Timeline();
+    timeline.insert([lap(1, 1)]);
+    const cursor = timeline.cursor();
+    cursor.follow();
+    cursor.subscribe('LapCount', () => {
+      throw new Error('boom');
+    });
+    expect(() => timeline.clear()).toThrow('boom');
+    expect(timeline.size).toBe(0);
+  });
+
+  it('clears a live timeline when the hub moves on to the next session', async () => {
+    const { snapshot, feeds } = liveSessionSwitch();
+    const handlers = new Map<string, (...args: never[]) => unknown>();
+    const hub: HubConnectionLike = {
+      start: () => Promise.resolve(),
+      stop: () => Promise.resolve(),
+      invoke: <T>() => Promise.resolve(snapshot as T),
+      on: (method, handler) => handlers.set(method, handler),
+      onclose: () => undefined,
+      onreconnecting: () => undefined,
+      onreconnected: () => undefined,
+    };
+    const feed = handlers.get.bind(handlers, 'feed') as () => (...args: unknown[]) => void;
+    const live = await LiveClient.connect({ connectionFactory: () => hub });
+
+    const timeline = Timeline.fromLive(live);
+    const kept = Timeline.fromLive(live, { clearOnSessionChange: false });
+    for (const t of [timeline, kept]) t.insert(live.snapshot);
+    const cursor = timeline.cursor();
+    cursor.follow();
+    expect(cursor.get('TeamRadio')?.Captures).toHaveLength(8);
+    expect(timeline.telemetry.drivers().length).toBeGreaterThan(0);
+
+    for (const [topic, data, ts] of feeds) feed()(topic, data, ts);
+    timeline[Symbol.dispose]();
+    kept[Symbol.dispose]();
+
+    expect(timeline.first).toBe(live.session!.utc);
+    expect(timeline.size).toBe(feeds.length);
+    expect(timeline.telemetry.drivers()).toEqual([]);
+    expect(cursor.get('SessionInfo')?.Name).toBe('Practice 2');
+    // Practice 1's radio is gone; F1 only resets it with Practice 2's first clip.
+    expect(cursor.get('TeamRadio')).toBeUndefined();
+    expect(cursor.get('TrackStatus')).toEqual({ Status: '1', Message: 'AllClear' });
+    expect(kept.size).toBe(live.snapshot.length + feeds.length);
+    expect((kept.latest()['TeamRadio'] as { Captures: unknown[] }).Captures).toHaveLength(8);
+  });
+
+  it('applies a late message of another topic in place instead of rebuilding', () => {
+    const timeline = new Timeline({ checkpointInterval: 1 });
+    timeline.insert([lap(10, 1), msg(20, 'TrackStatus', { Status: '1' })]);
+    const following = timeline.cursor();
+    const parked = timeline.cursor();
+    const stale = timeline.cursor();
+    following.follow();
+    parked.seek(25);
+    stale.seek(25);
+    const calls: [number[], boolean][] = [];
+    following.subscribe('LapCount', (_, { updates, reset }) => calls.push([updates.map((m) => m.utc), reset]));
+    const parkedCalls: [number[], boolean][] = [];
+    parked.subscribe(['LapCount', 'TrackStatus'], (changed, reset) => parkedCalls.push([changed.length, reset] as never));
+
+    // Same topic out of order: a rebuild.
+    timeline.insert([lap(5, 0)]);
+    expect(calls).toEqual([[[], true]]);
+    // Another topic out of order: applied in place.
+    timeline.insert([lap(15, 2)]);
+    timeline.insert([msg(12, 'WeatherData', { AirTemp: '30' })]);
+    expect(calls).toEqual([[[], true], [[15], false]]);
+    expect(following.get('LapCount')).toEqual({ CurrentLap: 2 });
+    expect(timeline.stateAt(14)['LapCount']).toEqual({ CurrentLap: 1 });
+    expect(timeline.stateAt(14)['WeatherData']).toEqual({ AirTemp: '30' });
+
+    parked.advanceTo(30);
+    expect(parkedCalls).toEqual([[2, true]]);
+    stale.advanceTo(30);
+    expect(stale.state).toEqual(timeline.latest());
+    expect(parked.state).toEqual(timeline.latest());
+
+    // A cursor already due for a rebuild takes late messages in with it.
+    stale.seek(30);
+    timeline.insert([lap(1, -1)]);
+    timeline.insert([msg(0, 'SessionStatus', { Status: 'Started' })]);
+    stale.advanceTo(30);
+    expect(stale.state).toEqual(timeline.latest());
+  });
+
+  it('matches a timeline built in order, whatever the arrival order', () => {
+    let seed = 7;
+    const random = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+    const topics = ['A', 'B', 'C'];
+    const arrivals: LiveTimingMessage[] = [];
+    for (let i = 0; i < 400; i += 1) {
+      const topic = topics[Math.floor(random() * topics.length)]!;
+      arrivals.push(msg(Math.floor(random() * 1_000), topic, { [String(i % 7)]: i, Last: i }));
+    }
+    const timeline = new Timeline({ checkpointInterval: 50 });
+    const following = timeline.cursor();
+    following.follow();
+    const parked = timeline.cursor();
+    parked.seek(0);
+    for (const [i, message] of arrivals.entries()) {
+      timeline.insert([message]);
+      if (i % 37 === 0) {
+        parked.advanceTo(parked.time + Math.floor(random() * 200));
+        expect(parked.state).toEqual(timeline.stateAt(parked.time));
+      }
+      expect(following.state).toEqual(timeline.latest());
+    }
+    const ordered = new Timeline();
+    ordered.insert(arrivals);
+    expect(timeline.messages()).toEqual(ordered.messages());
+    for (const time of [0, 100, 333, 500, 999]) expect(timeline.stateAt(time)).toEqual(ordered.stateAt(time));
+    expect(timeline.latest()).toEqual(ordered.latest());
+    expect(following.state).toEqual(ordered.latest());
+    parked.advanceTo(2_000);
+    expect(parked.state).toEqual(ordered.latest());
   });
 });

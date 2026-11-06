@@ -31,7 +31,8 @@ export {
 export type { LiveTimingMessage, StreamLine } from './decode.js';
 
 export { LIVE_URL, LiveClient, LogLevel, snapshotTime } from './live.js';
-export type { HubConnectionLike, LiveClientOptions, LiveStatus } from './live.js';
+export type { HubConnectionLike, LiveClientOptions, LiveSession, LiveStatus } from './live.js';
+export type { IRetryPolicy, RetryContext } from '@exhumer/signalr-client';
 
 export { applyPatch, applyUpdate, isKeyframe, isPlainObject, stripKeyframeMarkers } from './merge.js';
 
@@ -50,7 +51,7 @@ export type { CarSample, PositionSample } from './telemetry.js';
 export { formatOffset, formatUtc, parseDuration, parseOffset, parseUtc } from './time.js';
 
 export { Cursor, Timeline } from './timeline.js';
-export type { MessageSource, TimelineOptions, TopicChange, TopicListener, TopicsListener } from './timeline.js';
+export type { LiveTimelineOptions, MessageSource, TimelineOptions, TopicChange, TopicListener, TopicsListener } from './timeline.js';
 
 export {
   ARCHIVE_ONLY_TOPICS,

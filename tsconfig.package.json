@@ -6,6 +6,6 @@
     "noEmit": true,
     "rootDir": "."
   },
-  "include": ["tests/types/**/*"],
+  "include": ["tests/types/**/*", "scripts/**/*"],
   "exclude": ["node_modules"]
 }

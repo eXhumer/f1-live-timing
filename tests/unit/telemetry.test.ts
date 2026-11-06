@@ -28,6 +28,27 @@ describe('TelemetryStore', () => {
     expect(store.carRange('1', t0, t0)).toHaveLength(1);
   });
 
+  it('holds the earlier sample across a gap instead of interpolating', () => {
+    const store = new TelemetryStore();
+    store.add(car('2026-01-01T00:00:00.000Z', { '1': { 2: 100 } }));
+    store.add(car('2026-01-01T00:00:05.000Z', { '1': { 2: 200 } }));
+    store.add(car('2026-01-01T00:01:00.000Z', { '1': { 2: 0 } }));
+    const t0 = Date.parse('2026-01-01T00:00:00.000Z');
+    expect(store.carAt('1', t0 + 2_500)?.speed).toBe(150);
+    expect(store.carAt('1', t0 + 30_000)).toMatchObject({ utc: t0 + 5_000, speed: 200 });
+    store.add({
+      topic: 'Position',
+      utc: 0,
+      data: {
+        Position: [
+          { Timestamp: '2026-01-01T00:00:00.000Z', Entries: { '1': { Status: 'OnTrack', X: 0, Y: 0, Z: 0 } } },
+          { Timestamp: '2026-01-01T00:01:00.000Z', Entries: { '1': { Status: 'OnTrack', X: 600, Y: 0, Z: 0 } } },
+        ],
+      },
+    });
+    expect(store.positionAt('1', t0 + 30_000)).toMatchObject({ utc: t0, x: 0 });
+  });
+
   it('fills missing channels with zero', () => {
     const store = new TelemetryStore();
     store.add(car('2026-01-01T00:00:00.000Z', { '4': {} }));
